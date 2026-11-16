@@ -481,7 +481,30 @@
     const diff = l => { if (l.action !== 'UPDATE') return l.action === 'INSERT' ? 'Alta' : 'Baja';
       return Object.keys(l.new_data || {}).filter(k => k !== 'updated_at' && JSON.stringify(l.new_data[k]) !== JSON.stringify((l.old_data || {})[k]))
         .map(k => k + ': ' + JSON.stringify((l.old_data || {})[k]) + ' → ' + JSON.stringify(l.new_data[k])).join(' · ').slice(0, 260); };
+    const logoPath = (settings.find(s => s.key === 'logo_path') || {}).value || '';
+    const logoFile = h('input', { type: 'file', accept: 'image/png,image/jpeg,image/webp' });
+    const setLogo = async path => {
+      await run(db.from('business_settings').upsert({ key: 'logo_path', value: path, is_public: true,
+        description: 'Logotipo (ruta en el almacenamiento de fotos). Se cambia desde Configuración → Logotipo' }), path ? 'Logotipo actualizado' : 'Logotipo eliminado');
+      if (logoPath) await db.storage.from('product-images').remove([logoPath]);
+      applyLogo(); pageConfig();
+    };
+    logoFile.addEventListener('change', async () => {
+      const fl = logoFile.files[0]; if (!fl) return;
+      const ext = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp' }[fl.type];
+      if (!ext || fl.size > 2 * 1024 * 1024) return toast('Usa un PNG, JPG o WebP de hasta 2 MB (PNG con fondo transparente se ve mejor)', 'bad');
+      const path = 'brand/logo-' + crypto.randomUUID() + '.' + ext;
+      await run(db.storage.from('product-images').upload(path, fl, { contentType: fl.type, cacheControl: '31536000' }));
+      await setLogo(path);
+    });
     view().replaceChildren(head('Configuración'),
+      h('div', { class: 'card stack' }, h('h2', {}, 'Logotipo'),
+        h('div', { class: 'row' }, logoPath ? h('img', { src: imgUrl(logoPath), alt: 'Logotipo actual', class: 'logo-preview' }) : h('span', { class: 'badge warn' }, 'Sin logotipo: se muestra el nombre'),
+          h('div', { class: 'stack grow' },
+            h('p', { class: 'muted small' }, 'Aparece en el encabezado del catálogo, en el PDF del catálogo, en la pantalla de acceso y en el menú de este panel. Recomendado: PNG horizontal con fondo transparente, mínimo 600 px de ancho.'),
+            isOwner() ? h('div', { class: 'row' }, h('div', { class: 'grow' }, logoFile),
+              logoPath ? h('button', { class: 'btn sm danger', type: 'button', onclick: () => { if (confirm('¿Quitar el logotipo?')) setLogo(''); } }, 'Quitar logotipo') : null)
+              : h('p', { class: 'muted small' }, 'Solo el superadministrador puede cambiarlo.')))),
       h('div', { class: 'card stack' }, h('h2', {}, 'Enlace y código QR permanentes'),
         h('div', { class: 'row' }, h('img', { src: qrSrc, alt: 'Código QR del catálogo', width: 180, height: 180 }),
           h('div', { class: 'stack grow' }, h('code', {}, String(url)), h('p', { class: 'muted small' }, 'El QR apunta al enlace fijo del catálogo; el contenido se lee de la base cada vez, así que no hay que regenerarlo cuando cambian productos, precios o existencias.'),
@@ -537,7 +560,20 @@
     try { await page.fn(); } catch (e) { console.error(e); if (!view().querySelector('.card,.kpis')) view().replaceChildren(h('div', { class: 'notice' }, 'No se pudo cargar esta sección.')); }
   }
 
+  // Logotipo: se lee de la configuración pública (misma fuente que el catálogo)
+  async function applyLogo() {
+    try {
+      const { data } = await db.rpc('get_catalog');
+      const path = data && data.settings && data.settings.logo_path, name = (data && data.settings && data.settings.business_name) || 'SUKIVA';
+      document.querySelectorAll('.brand').forEach(el => {
+        const sub = el.querySelector('span');
+        el.replaceChildren(path ? h('img', { src: imgUrl(path), alt: name }) : name, sub || '');
+      });
+    } catch { /* sin logotipo: se queda el nombre */ }
+  }
+
   async function boot() {
+    if (ready) applyLogo();
     if (!ready) { $('login').classList.remove('hidden'); $('loginMsg').textContent = 'Falta configurar web/config.js con la URL y la llave publicable del proyecto.'; $('btnLogin').disabled = true; return; }
     const { data } = await db.auth.getSession(); session = data.session;
     if (!session) { $('app').classList.add('hidden'); $('login').classList.remove('hidden'); return; }

@@ -25,8 +25,9 @@
 
   function renderHeader() {
     const name = S('business_name') || 'SUKIVA';
-    $('bizName').textContent = name; document.title = name + ' · Catálogo';
-    $('printTitle').textContent = name + ' · Catálogo de precios';
+    const logo = S('logo_path');
+    $('bizName').replaceChildren(logo ? h('img', { src: imgUrl(logo), alt: name }) : name); document.title = name + ' · Catálogo';
+    $('printTitle').replaceChildren(logo ? h('img', { src: imgUrl(logo), alt: name, class: 'print-logo' }) : '', name + ' · Catálogo de precios');
     $('printMeta').textContent = 'Actualizado el ' + fmtDate(data.generated_at, true) + ' · Precios y existencias sujetos a cambio';
     const cats = ['Todo', ...new Set(data.products.map(p => p.category))];
     $('cats').replaceChildren(...cats.map(c => h('button', { class: 'chip' + (c === filter.cat ? ' on' : ''), type: 'button', role: 'tab',
