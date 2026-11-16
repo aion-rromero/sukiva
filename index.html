@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="es-MX">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://*.supabase.co; connect-src https://*.supabase.co; base-uri 'none'; form-action 'none'; object-src 'none'">
+<meta name="referrer" content="strict-origin-when-cross-origin">
+<title>SUKIVA · Catálogo</title>
+<meta name="description" content="Catálogo SUKIVA: prendas disponibles, precios y existencias actualizadas.">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<header class="cat-top">
+  <div class="in">
+    <div class="row">
+      <div class="logo grow" id="bizName">SUKIVA</div>
+      <button class="btn sm no-print" id="btnPdf" type="button">Descargar PDF</button>
+    </div>
+    <input id="search" type="search" placeholder="Buscar prenda o color…" aria-label="Buscar" autocomplete="off">
+    <div class="chips" id="cats" role="tablist" aria-label="Categorías"></div>
+  </div>
+</header>
+<main class="cat-main">
+  <div class="print-only">
+    <h1 id="printTitle">SUKIVA · Catálogo</h1>
+    <p class="muted" id="printMeta"></p>
+  </div>
+  <div id="promos" class="stack"></div>
+  <p id="shipNote" class="muted small"></p>
+  <div id="grid" class="grid" aria-live="polite"></div>
+  <p id="empty" class="muted hidden">No encontramos prendas con ese filtro.</p>
+  <section id="policies" class="stack"></section>
+  <footer id="contact" class="card stack"></footer>
+</main>
+<div class="cartbar hidden no-print" id="cartbar"><button class="btn primary block" id="btnCart" type="button"></button></div>
+<script src="supabase.js"></script>
+<script src="config.js"></script>
+<script src="common.js"></script>
+<script src="catalog.js"></script>
+</body>
+</html>
