@@ -29,7 +29,9 @@
     $('bizName').replaceChildren(logo ? h('img', { src: imgUrl(logo), alt: name }) : name); document.title = name + ' · Catálogo';
     $('printTitle').replaceChildren(logo ? h('img', { src: imgUrl(logo), alt: name, class: 'print-logo' }) : '', name + ' · Catálogo de precios');
     $('printMeta').textContent = 'Actualizado el ' + fmtDate(data.generated_at, true) + ' · Precios y existencias sujetos a cambio';
-    const cats = ['Todo', ...new Set(data.products.map(p => p.category))];
+    // Todas las categorías activas (en su orden), tengan o no prendas todavía; las nuevas aparecen solas.
+    const cats = ['Todo', ...new Set([...(data.categories || []), ...data.products.map(p => p.category)])];
+    if (!cats.includes(filter.cat)) filter.cat = 'Todo';
     $('cats').replaceChildren(...cats.map(c => h('button', { class: 'chip' + (c === filter.cat ? ' on' : ''), type: 'button', role: 'tab',
       'aria-selected': String(c === filter.cat), onclick: () => { filter.cat = c; renderHeader(); renderGrid(); } }, c)));
     $('promos').replaceChildren(...data.promotions.map(pm => h('div', { class: 'promo' }, h('b', {}, pm.name), pm.description ? h('div', {}, pm.description) : null)));
@@ -52,6 +54,7 @@
           h('span', { class: 'price' }, lo === hi ? money(lo) : 'Desde ' + money(lo)),
           h('span', { class: 'muted small print-only' }, 'Tallas: ' + (sizes.join(', ') || 'agotado'))));
     }));
+    $('empty').textContent = filter.text.trim() ? 'No encontramos prendas con esa búsqueda.' : 'Aún no hay prendas disponibles en esta categoría.';
     $('empty').classList.toggle('hidden', list.length > 0);
   }
 

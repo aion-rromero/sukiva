@@ -428,9 +428,49 @@
           p.status === 'ordenada' ? h('button', { class: 'btn', type: 'button', onclick: () => st('borrador') }, 'Regresar a borrador') : null,
           canReceive ? h('button', { class: 'btn primary', type: 'button', onclick: async () => {
             if (confirm('¿Recibir TODAS las piezas pendientes? El inventario sube de inmediato.')) { await run(db.rpc('purchase_receive_all', { purchase: id }), 'Mercancía recibida'); load(); } } }, 'Recibir todo lo pendiente') : null,
+          p.status === 'recibida' ? h('button', { class: 'btn primary', type: 'button', onclick: () => correctPurchase(p, variants, fields, load) }, 'Editar compra') : null,
           editable ? h('button', { class: 'btn danger', type: 'button', onclick: () => { if (confirm('¿Cancelar la compra?')) st('cancelada'); } }, 'Cancelar compra') : null));
     }
     await load();
+  }
+
+  // Corrección de una compra ya recibida: datos generales, cantidades, precios, partidas nuevas o eliminadas.
+  function correctPurchase(p, variants, fields, after) {
+    const f = form(fields, p);
+    const rows = p.purchase_items.map(i => ({ id: i.id, variant_id: i.variant_id, sku: i.product_variants.sku, name: i.product_variants.products.name,
+      qty: i.qty, unit_price: Number(i.unit_price), was: i.qty }));
+    const list = h('div', {});
+    const sel = h('select', {}, variants.map(v => h('option', { value: v.id }, v.sku + ' — ' + v.products.name + ' ' + [v.color, v.size].filter(Boolean).join(' '))));
+    const nq = h('input', { type: 'number', min: 1, value: 1, style: 'width:80px' }), np = h('input', { type: 'number', step: '0.01', placeholder: 'Precio ' + p.currency, style: 'width:130px' });
+    const draw = () => list.replaceChildren(table([
+      { label: 'SKU', nowrap: true, get: r => [r.sku, r.id ? null : ' ', r.id ? null : badge('Nueva', 'info')] }, { label: 'Producto', get: r => r.name },
+      { label: 'Piezas', get: r => { const i = h('input', { type: 'number', min: 1, value: r.qty, style: 'width:80px' }); i.addEventListener('input', () => { r.qty = Number(i.value); }); return i; } },
+      { label: 'Precio ' + p.currency, get: r => { const i = h('input', { type: 'number', step: '0.01', min: 0, value: r.unit_price, style: 'width:110px' }); i.addEventListener('input', () => { r.unit_price = Number(i.value); }); return i; } },
+      { label: '', get: r => h('button', { class: 'btn sm danger', type: 'button', onclick: () => { rows.splice(rows.indexOf(r), 1); draw(); } }, 'Quitar') }], rows));
+    draw();
+    const save = h('button', { class: 'btn primary', type: 'button', onclick: async () => {
+      if (!rows.length) return toast('La compra debe conservar al menos una partida', 'bad');
+      if (rows.some(r => !(r.qty >= 1) || !(r.unit_price >= 0))) return toast('Revisa cantidades y precios', 'bad');
+      const removed = p.purchase_items.filter(i => !rows.some(r => r.id === i.id)).length, changed = rows.filter(r => r.id && r.qty !== r.was).length, added = rows.filter(r => !r.id).length;
+      if (!confirm('Se aplicará la corrección a ' + p.folio + ':\n· ' + changed + ' partida(s) con otra cantidad\n· ' + added + ' partida(s) nueva(s)\n· ' + removed + ' partida(s) eliminada(s)\n\nEl inventario y los costos se ajustan de inmediato. ¿Continuar?')) return;
+      save.disabled = true;
+      try {
+        const hd = f.get(); for (const k of Object.keys(hd)) if (hd[k] == null && k !== 'reference' && k !== 'notes' && k !== 'expected_date') delete hd[k];
+        await run(db.rpc('purchase_correct', { purchase: p.id, payload: { header: hd, items: rows.map(r => r.id ? { id: r.id, qty: r.qty, unit_price: r.unit_price } : { variant_id: r.variant_id, qty: r.qty, unit_price: r.unit_price }) } }), 'Compra corregida');
+        d.close(); after();
+      } catch { /* mostrado */ } finally { save.disabled = false; }
+    } }, 'Guardar corrección');
+    const d = dialog('Editar compra ' + p.folio, [
+      h('div', { class: 'notice small' }, 'Esta compra ya está recibida. Al guardar: cada diferencia de piezas genera un movimiento de inventario, el costo final se recalcula con los datos nuevos y no se puede quitar una pieza que ya se vendió o está apartada. Los precios de venta no cambian solos: se ajustan en Productos.'),
+      f.el, h('h3', {}, 'Partidas'), list,
+      h('div', { class: 'row' }, h('div', { class: 'grow' }, sel), nq, np, h('button', { class: 'btn', type: 'button', onclick: () => {
+        const v = variants.find(x => x.id === sel.value);
+        if (!v || !(Number(nq.value) >= 1) || np.value === '') return toast('Cantidad y precio son obligatorios', 'bad');
+        if (rows.some(r => r.variant_id === v.id)) return toast('Esa variante ya está en la compra: cambia su cantidad', 'bad');
+        rows.push({ id: null, variant_id: v.id, sku: v.sku, name: v.products.name, qty: Number(nq.value), unit_price: Number(np.value), was: 0 }); draw();
+      } }, 'Agregar partida')),
+      h('p', { class: 'muted small' }, 'Para agregar una prenda que no existe, créala primero en Productos (con su color y talla).')],
+      [h('button', { class: 'btn', type: 'button', onclick: () => d.close() }, 'Cancelar'), save]);
   }
 
   // ═════════════════════════ CLIENTES
