@@ -22,6 +22,18 @@
     if (okMsg) toast(okMsg, 'ok');
     return data;
   }
+  // Personal visible para la sesión (administración ve a todos; una vendedora solo se ve a sí misma)
+  async function staffList() { return run(db.from('profiles').select('id,full_name,role,active').order('full_name')); }
+  async function adminUsers(body) {
+    const { data, error } = await db.functions.invoke('admin-users', { body });
+    if (error) {
+      let msg = 'No se pudo completar la operación';
+      try { msg = (await error.context.json()).error || msg; } catch { /* sin detalle */ }
+      toast(msg, 'bad'); throw error;
+    }
+    return data;
+  }
+  const pwField = (k, label) => ({ k, label, type: 'password', help: 'Mínimo 12 caracteres' });
   const badge = (text, kind) => h('span', { class: 'badge ' + (kind || '') }, text);
   const stBadge = s => badge(STATUS[s] || s, STATUS_KIND[s]);
 
@@ -42,7 +54,8 @@
       if (f.type === 'select') input = h('select', {}, f.options.map(([val, label]) => h('option', { value: val, selected: String(val) === String(v) }, label)));
       else if (f.type === 'textarea') input = h('textarea', { value: v, maxlength: f.max || 4000 });
       else if (f.type === 'check') input = h('input', { type: 'checkbox', checked: v === true });
-      else input = h('input', { type: f.type || 'text', value: v, step: f.step, min: f.min, maxlength: f.max, placeholder: f.ph, required: f.required });
+      else input = h('input', { type: f.type || 'text', value: v, step: f.step, min: f.min, maxlength: f.max, placeholder: f.ph, required: f.required,
+        autocomplete: f.type === 'password' ? 'new-password' : null });
       inputs[f.k] = input;
       return f.type === 'check' ? h('label', { class: 'check' + (f.wide ? ' wide' : '') }, input, f.label)
                                 : h('label', { class: 'field' + (f.wide ? ' wide' : '') }, f.label, input, f.help ? h('span', { class: 'muted small' }, f.help) : null);
@@ -51,6 +64,7 @@
       const i = inputs[f.k];
       if (f.type === 'check') return [f.k, i.checked];
       if (f.type === 'number') return [f.k, i.value === '' ? null : Number(i.value)];
+      if (f.type === 'password') return [f.k, i.value];
       return [f.k, i.value.trim() === '' ? null : i.value.trim()];
     }));
     return { el, get, inputs };
@@ -122,7 +136,7 @@
     fStatus.value = 'abiertos';
     const fText = h('input', { type: 'search', placeholder: 'Folio, nombre o teléfono', style: 'max-width:240px' });
     const out = h('div', { class: 'card' });
-    let rows = [];
+    let rows = [], names = {};
     function draw() {
       const t = fText.value.trim().toLowerCase();
       const list = rows.filter(o => (!fStatus.value || (fStatus.value === 'abiertos' ? !['entregado', 'cancelado', 'devuelto'].includes(o.status) : o.status === fStatus.value)) &&
@@ -131,11 +145,14 @@
         { label: 'Folio', nowrap: true, get: o => h('b', {}, o.folio) }, { label: 'Fecha', nowrap: true, get: o => fmtDate(o.created_at, true) },
         { label: 'Cliente', get: o => [o.contact_name, h('div', { class: 'muted small' }, o.contact_phone)] }, { label: 'Canal', get: o => o.channel },
         { label: 'Entrega', get: o => o.delivery_type }, { label: 'Estatus', get: o => stBadge(o.status) },
+        { label: 'Vendedor(a)', get: o => o.seller_id ? (names[o.seller_id] || 'Otro usuario') : badge('Sin asignar', 'warn') },
         { label: 'Total', right: true, get: o => money(o.total) }, { label: 'Saldo', right: true, get: o => Number(o.total) - Number(o.paid) > 0 ? h('b', {}, money(o.total - o.paid)) : badge('Pagado', 'ok') }],
         list, o => orderDetail(o.id, load)));
     }
     async function load() {
-      rows = await run(db.from('orders').select('id,folio,created_at,contact_name,contact_phone,channel,status,delivery_type,total,paid').order('created_at', { ascending: false }).limit(500));
+      const [r, staff] = await Promise.all([
+        run(db.from('orders').select('id,folio,created_at,contact_name,contact_phone,channel,status,delivery_type,total,paid,seller_id').order('created_at', { ascending: false }).limit(500)), staffList()]);
+      rows = r; names = Object.fromEntries(staff.map(p => [p.id, p.full_name]));
       draw();
     }
     fStatus.addEventListener('change', draw); fText.addEventListener('input', draw);
@@ -144,9 +161,11 @@
   }
 
   async function newOrder(after) {
-    const variants = await run(db.rpc('staff_variants'));
+    const [variants, staff] = await Promise.all([run(db.rpc('staff_variants')), isAdmin() ? staffList() : Promise.resolve([])]);
     const lines = [];
     const f = form([
+      ...(isAdmin() ? [{ k: 'seller_id', label: 'Venta registrada a', type: 'select', def: session.user.id,
+        options: staff.filter(p => p.active).map(p => [p.id, p.full_name + ' (' + p.role + ')']) }] : []),
       { k: 'full_name', label: 'Nombre completo', required: true }, { k: 'phone', label: 'Teléfono (10 dígitos)', type: 'tel' },
       { k: 'email', label: 'Correo (opcional)', type: 'email' },
       { k: 'channel', label: 'Canal', type: 'select', options: [['gym', 'Gimnasio'], ['whatsapp', 'WhatsApp'], ['instagram', 'Instagram'], ['otro', 'Otro']] },
@@ -183,6 +202,7 @@
     const d = dialog('Pedido', body, []);
     d.addEventListener('close', () => after && after());
     async function load() {
+      const staff = await staffList();
       const [o, providers] = await Promise.all([
         run(db.from('orders').select('*, order_items(*), order_status_history(*), payments(*), shipments(*, shipping_providers(name))').eq('id', id).single()),
         run(db.from('shipping_providers').select('id,name').eq('active', true).order('name'))]);
@@ -204,6 +224,17 @@
         h('div', { class: 'card' }, h('b', {}, o.contact_name), h('div', {}, o.contact_phone, o.contact_email ? ' · ' + o.contact_email : ''),
           h('div', { class: 'muted' }, o.delivery_type === 'nacional' ? 'Envío nacional: ' + (o.shipping_address || '') : 'Entrega local / gimnasio'),
           o.customer_notes ? h('div', { class: 'notice small', style: 'margin-top:8px' }, 'Nota del cliente: ', o.customer_notes) : null),
+        (() => {
+          const current = staff.find(p => p.id === o.seller_id);
+          if (isAdmin()) {
+            const ss = h('select', { style: 'width:auto' }, h('option', { value: '' }, 'Sin asignar'),
+              staff.filter(p => p.active || p.id === o.seller_id).map(p => h('option', { value: p.id, selected: p.id === o.seller_id }, p.full_name + ' (' + p.role + ')')));
+            ss.addEventListener('change', async () => { try { await run(db.rpc('order_set_seller', { order_id: id, seller: ss.value || null }), 'Venta reasignada'); } finally { load(); } });
+            return h('label', { class: 'row small' }, h('b', {}, 'Venta registrada a:'), ss, h('span', { class: 'muted' }, 'Define a quién se le paga la comisión.'));
+          }
+          return h('div', { class: 'row small' }, h('b', {}, 'Venta registrada a:'), o.seller_id ? (current ? current.full_name : 'Otro usuario') : badge('Sin asignar', 'warn'),
+            o.seller_id ? null : h('button', { class: 'btn sm', type: 'button', onclick: async () => { await run(db.rpc('order_set_seller', { order_id: id, seller: session.user.id }), 'Venta registrada a tu nombre'); load(); } }, 'Tomar esta venta'));
+        })(),
         table([{ label: 'Prenda', get: i => i.description }, { label: 'Cant.', right: true, get: i => i.qty }, { label: 'Precio', right: true, get: i => money(i.unit_price) },
           { label: 'Importe', right: true, get: i => money(i.qty * i.unit_price) }], o.order_items),
         h('div', { class: 'form-grid' }, h('label', { class: 'field' }, 'Descuento ($)', disc), h('label', { class: 'field' }, 'Envío cobrado ($)', ship),
@@ -533,19 +564,61 @@
         cols: [{ label: 'Nombre', get: p => p.name }, { label: 'Contacto', get: p => p.contact || '—' }, { label: 'Activo', get: p => p.active ? 'Sí' : 'No' }],
         fields: [{ k: 'name', label: 'Nombre', required: true }, { k: 'contact', label: 'Contacto' }, { k: 'phone', label: 'Teléfono' }, { k: 'email', label: 'Correo', type: 'email' },
           { k: 'notes', label: 'Notas', type: 'textarea', wide: true }, { k: 'active', label: 'Activo', type: 'check', def: true }] }),
-      h('div', { class: 'card stack' }, h('h2', {}, 'Usuarios y permisos'),
-        h('p', { class: 'muted small' }, 'Las cuentas se crean en Supabase → Authentication (invitación). Nacen INACTIVAS: aquí el superadministrador las activa y asigna rol.'),
+      h('div', { class: 'card stack' }, h('div', { class: 'row' }, h('h2', { class: 'grow' }, 'Usuarios y permisos'),
+          isOwner() ? h('button', { class: 'btn sm primary', type: 'button', onclick: () => formDialog('Nuevo usuario', [
+            { k: 'full_name', label: 'Nombre completo', required: true }, { k: 'email', label: 'Correo (será su usuario)', type: 'email', required: true },
+            { k: 'role', label: 'Rol', type: 'select', options: [['vendedor', 'Vendedor(a): pedidos, pagos y clientes'], ['admin', 'Administrador: operación completa']] },
+            pwField('password', 'Contraseña temporal')], {}, async v => {
+              if (!v.full_name || !v.email) { toast('Nombre y correo son obligatorios', 'bad'); throw new Error('datos'); }
+              if (!v.password || v.password.length < 12) { toast('La contraseña temporal debe tener al menos 12 caracteres', 'bad'); throw new Error('pw'); }
+              const res = await adminUsers({ action: 'create', email: v.email, password: v.password });
+              await run(db.from('profiles').update({ full_name: v.full_name, role: v.role, active: true }).eq('id', res.id), 'Usuario creado y activado');
+              pageConfig();
+            }) }, '+ Nuevo usuario') : null),
+        h('p', { class: 'muted small' }, isOwner() ? 'Da de alta aquí a tus vendedoras: entran con su correo y la contraseña temporal, y la cambian con "Cambiar mi contraseña". Las ventas que capturen quedan registradas a su nombre.'
+          : 'Solo el superadministrador da de alta usuarios y asigna roles.'),
         table([{ label: 'Nombre', get: p => p.full_name }, { label: 'Rol', get: p => badge(p.role, p.role === 'superadmin' ? 'info' : '') }, { label: 'Estado', get: p => p.active ? badge('Activo', 'ok') : badge('Inactivo', 'bad') },
           { label: 'Alta', get: p => fmtDate(p.created_at) }], profiles, isOwner() ? p => formDialog('Usuario', [{ k: 'full_name', label: 'Nombre', required: true },
             { k: 'role', label: 'Rol', type: 'select', options: [['vendedor', 'Vendedor(a): pedidos, pagos y clientes'], ['admin', 'Administrador: operación completa'], ['superadmin', 'Superadministrador: todo + configuración']] },
-            { k: 'active', label: 'Cuenta activa', type: 'check' }], p, async v => { await run(db.from('profiles').update(v).eq('id', p.id), 'Usuario actualizado'); pageConfig(); }) : null)),
+            { k: 'active', label: 'Cuenta activa', type: 'check' }], p, async v => { await run(db.from('profiles').update(v).eq('id', p.id), 'Usuario actualizado'); pageConfig(); },
+            h('div', {}, h('button', { class: 'btn sm', type: 'button', onclick: () => formDialog('Nueva contraseña para ' + p.full_name, [pwField('password', 'Contraseña temporal')], {}, async v => {
+              if (!v.password || v.password.length < 12) { toast('Mínimo 12 caracteres', 'bad'); throw new Error('pw'); }
+              await adminUsers({ action: 'reset_password', user_id: p.id, password: v.password }); toast('Contraseña actualizada', 'ok');
+            }) }, 'Restablecer contraseña'))) : null)),
       h('div', { class: 'card stack' }, h('h2', {}, 'Auditoría (últimos 150 cambios)'), table([{ label: 'Fecha', nowrap: true, get: l => fmtDate(l.at, true) },
         { label: 'Usuario', get: l => names[l.user_id] || (l.user_id ? 'Usuario' : 'Sistema / catálogo') }, { label: 'Tabla', get: l => l.table_name }, { label: 'Cambio', get: l => h('span', { class: 'small' }, diff(l)) }], logs)));
+  }
+
+  // ═════════════════════════ COMISIONES
+  async function pageComisiones() {
+    const from = h('input', { type: 'date', value: today().slice(0, 8) + '01' }), to = h('input', { type: 'date', value: today() });
+    const out = h('div', { class: 'stack' });
+    async function load() {
+      const d = await run(db.rpc('commissions', { date_from: from.value, date_to: to.value }));
+      const tot = k => d.rows.reduce((a, r) => a + Number(r[k] || 0), 0);
+      const cols = [{ label: 'Vendedor(a)', get: r => r.seller_id ? r.seller : badge('Sin asignar', 'warn') }, { label: 'Pedidos', right: true, get: r => r.orders },
+        { label: 'Piezas', right: true, get: r => r.pieces }, { label: 'Venta', right: true, get: r => money(r.sales) }];
+      if (d.is_admin) cols.push({ label: 'Ganancia', right: true, get: r => money(r.profit) });
+      cols.push({ label: 'Comisión', right: true, get: r => h('b', {}, money(r.commission)) });
+      out.replaceChildren(
+        h('div', { class: 'kpis' }, h('div', { class: 'kpi' }, h('span', { class: 'muted small' }, 'Venta del periodo'), h('b', {}, money(tot('sales')))),
+          h('div', { class: 'kpi' }, h('span', { class: 'muted small' }, d.is_admin ? 'Comisiones por pagar' : 'Mi comisión'), h('b', {}, money(tot('commission')))),
+          h('div', { class: 'kpi' }, h('span', { class: 'muted small' }, 'Piezas vendidas'), h('b', {}, tot('pieces')))),
+        h('div', { class: 'card stack' }, table(cols, d.rows),
+          h('p', { class: 'muted small' }, 'Comisión: ' + Math.round(d.pct * 100) + '% sobre ' + (d.base === 'Precio de venta' ? 'el precio de venta'
+            : 'la ganancia (precio menos ' + Math.round(d.card_fee * 100) + '% de comisión de tarjeta, menos costo y descuentos)') +
+            '. Cuenta solo pedidos Enviados o Entregados en el periodo; los devueltos y cancelados no generan comisión.' +
+            (d.is_admin ? ' El porcentaje y la base se cambian en Configuración.' : ''))));
+    }
+    from.addEventListener('change', load); to.addEventListener('change', load);
+    view().replaceChildren(head(isAdmin() ? 'Comisiones por vendedor(a)' : 'Mis ventas y comisión', h('label', { class: 'row small muted' }, 'Del', from), h('label', { class: 'row small muted' }, 'al', to)), out);
+    await load();
   }
 
   // ═════════════════════════ ARRANQUE
   const PAGES = [
     { id: 'dashboard', label: 'Dashboard', admin: true, fn: pageDashboard }, { id: 'pedidos', label: 'Pedidos', fn: pagePedidos },
+    { id: 'comisiones', label: 'Comisiones', fn: pageComisiones },
     { id: 'productos', label: 'Productos', admin: true, fn: pageProductos }, { id: 'inventario', label: 'Inventario', admin: true, fn: pageInventario },
     { id: 'compras', label: 'Compras', admin: true, fn: pageCompras }, { id: 'clientes', label: 'Clientes', fn: pageClientes },
     { id: 'politicas', label: 'Políticas', admin: true, fn: pagePoliticas }, { id: 'influencers', label: 'Influencers', admin: true, fn: pageInfluencers },
@@ -592,6 +665,13 @@
     if (error) { $('loginMsg').textContent = 'Correo o contraseña incorrectos.'; return; }
     boot();
   });
+  $('btnPassword').addEventListener('click', () => formDialog('Cambiar mi contraseña', [pwField('p1', 'Nueva contraseña'), pwField('p2', 'Repite la nueva contraseña')], {}, async v => {
+    if (!v.p1 || v.p1.length < 12) { toast('Mínimo 12 caracteres', 'bad'); throw new Error('pw'); }
+    if (v.p1 !== v.p2) { toast('Las contraseñas no coinciden', 'bad'); throw new Error('pw'); }
+    const { error } = await db.auth.updateUser({ password: v.p1 });
+    if (error) { toast('No se pudo cambiar la contraseña', 'bad'); throw error; }
+    toast('Contraseña actualizada', 'ok');
+  }));
   $('btnLogout').addEventListener('click', async () => { await db.auth.signOut(); location.hash = ''; location.reload(); });
   window.addEventListener('hashchange', () => { if (role) route(); });
   boot();
