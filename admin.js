@@ -586,13 +586,31 @@
           { k: 'followers', label: 'Seguidores', type: 'number' }, { k: 'engagement_pct', label: 'Engagement %', type: 'number', step: '0.01' }, { k: 'affinity', label: 'Afinidad con SUKIVA (1-5)', type: 'number', min: 1 },
           { k: 'city', label: 'Ciudad' }, { k: 'contact', label: 'Contacto' },
           { k: 'status', label: 'Estatus', type: 'select', options: ['prospecto', 'contactada', 'aceptó', 'enviado', 'publicó', 'descartada'].map(s => [s, s]) }, { k: 'notes', label: 'Notas', type: 'textarea', wide: true }] }),
-      h('div', { class: 'card stack' }, h('h2', {}, 'Obsequios y resultados'), table([{ label: 'Fecha', get: g => fmtDate(g.sent_at) }, { label: 'Influencer', get: g => g.influencer_profiles.name },
+      h('div', { class: 'card stack' }, h('h2', {}, 'Obsequios y resultados'), h('p', { class: 'muted small' }, 'Da clic en un obsequio para editarlo o eliminarlo.'), table([{ label: 'Fecha', get: g => fmtDate(g.sent_at) }, { label: 'Influencer', get: g => g.influencer_profiles.name },
         { label: 'Prenda', get: g => [g.qty + ' × ' + vName(g.product_variants), h('div', { class: 'muted small' }, g.product_variants.sku)] }, { label: 'Costo', right: true, get: g => money(g.qty * g.unit_cost + Number(g.shipping_cost)) },
         { label: 'Publicaciones', right: true, get: g => g.posts_count }, { label: 'Alcance', right: true, get: g => g.reach != null ? g.reach.toLocaleString('es-MX') : '—' },
         { label: 'Ventas atribuidas', right: true, get: g => g.sales_attributed != null ? money(g.sales_attributed) : '—' }], gifts,
-        g => formDialog('Resultados del obsequio', [{ k: 'delivered_at', label: 'Fecha de entrega', type: 'date' }, { k: 'posts_count', label: 'Publicaciones', type: 'number', min: 0 },
-          { k: 'reach', label: 'Alcance', type: 'number', min: 0 }, { k: 'sales_attributed', label: 'Ventas atribuidas ($)', type: 'number', step: '0.01' }, { k: 'notes', label: 'Notas', type: 'textarea', wide: true }], g,
-          async v => { v.posts_count = v.posts_count || 0; await run(db.from('influencer_gifts').update(v).eq('id', g.id), 'Resultados guardados'); pageInfluencers(); }))));
+        g => { const fd = formDialog('Editar obsequio', [
+            { k: 'influencer_id', label: 'Influencer', type: 'select', options: profiles.map(p => [p.id, p.name]) },
+            { k: 'variant_id', label: 'Prenda', type: 'select', options: variants.filter(v => v.id === g.variant_id || v.stock_on_hand - v.stock_reserved > 0)
+              .map(v => [v.id, vName(v) + (v.id === g.variant_id ? ' (la actual)' : ' (' + (v.stock_on_hand - v.stock_reserved) + ' disp.)')]) },
+            { k: 'qty', label: 'Piezas', type: 'number', min: 1 }, { k: 'shipping_cost', label: 'Costo de envío ($)', type: 'number', step: '0.01' },
+            { k: 'sent_at', label: 'Fecha de envío', type: 'date' }, { k: 'delivered_at', label: 'Fecha de entrega', type: 'date' },
+            { k: 'posts_count', label: 'Publicaciones', type: 'number', min: 0 }, { k: 'reach', label: 'Alcance', type: 'number', min: 0 },
+            { k: 'sales_attributed', label: 'Ventas atribuidas ($)', type: 'number', step: '0.01' }, { k: 'notes', label: 'Notas', type: 'textarea', wide: true }], g,
+          async v => {
+            if (!(v.qty >= 1)) { toast('Las piezas deben ser al menos 1', 'bad'); throw new Error('qty'); }
+            const payload = { ...v, posts_count: v.posts_count || 0, shipping_cost: v.shipping_cost || 0 };
+            for (const k of ['delivered_at', 'reach', 'sales_attributed', 'notes']) if (payload[k] == null) payload[k] = '';
+            await run(db.rpc('gift_update', { gift: g.id, payload }), 'Obsequio actualizado'); pageInfluencers();
+          },
+          h('div', { class: 'stack' },
+            h('p', { class: 'muted small' }, 'Si cambias la prenda o las piezas, la anterior regresa a inventario y la nueva se descuenta, cada una con su movimiento.'),
+            h('div', {}, h('button', { class: 'btn sm danger', type: 'button', onclick: async e => {
+              if (!confirm('¿Eliminar este obsequio? La prenda regresa a inventario.')) return;
+              await run(db.rpc('gift_delete', { gift: g.id }), 'Obsequio eliminado; la prenda regresó a inventario');
+              e.target.closest('dialog').close(); pageInfluencers();
+            } }, 'Eliminar obsequio')))); return fd; })));
   }
 
   // ═════════════════════════ CONFIGURACIÓN
