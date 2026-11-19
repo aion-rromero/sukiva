@@ -2,40 +2,80 @@
 <html lang="es-MX">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://*.supabase.co; connect-src https://*.supabase.co; base-uri 'none'; form-action 'none'; object-src 'none'">
 <meta name="referrer" content="strict-origin-when-cross-origin">
-<title>SUKIVA · Catálogo</title>
-<meta name="description" content="Catálogo SUKIVA: prendas disponibles, precios y existencias actualizadas.">
-<link rel="stylesheet" href="app.css">
+<meta name="theme-color" content="#e8e9e7">
+<title>SUKIVA</title>
+<meta name="description" content="SUKIVA: ropa deportiva original con existencia real, precios y tallas actualizados.">
+<link rel="preconnect" href="https://zrjhwthvbsyumzcilqnh.supabase.co" crossorigin>
+<link rel="preload" href="anybody.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="store.css">
 </head>
 <body>
-<header class="cat-top">
-  <div class="in">
-    <div class="row">
-      <div class="logo grow" id="bizName">SUKIVA</div>
-      <button class="btn sm no-print" id="btnPdf" type="button">Descargar PDF</button>
-    </div>
-    <input id="search" type="search" placeholder="Buscar prenda o color…" aria-label="Buscar" autocomplete="off">
-    <div class="chips" id="cats" role="tablist" aria-label="Categorías"></div>
-  </div>
+<header class="bar" id="bar">
+  <a class="brand" href="#top" id="brand" aria-label="Inicio">SUKIVA</a>
+  <nav class="bar-actions" aria-label="Principal">
+    <a class="bar-link" href="#prendas">Prendas</a>
+    <button class="bar-link" id="openBag" type="button" aria-haspopup="dialog">Mi solicitud <span class="count" id="bagCount" hidden>0</span></button>
+  </nav>
 </header>
-<main class="cat-main">
-  <div class="print-only">
-    <h1 id="printTitle">SUKIVA · Catálogo</h1>
-    <p class="muted" id="printMeta"></p>
-  </div>
-  <div id="promos" class="stack"></div>
-  <p id="shipNote" class="muted small"></p>
-  <div id="grid" class="grid" aria-live="polite"></div>
-  <p id="empty" class="muted hidden">No encontramos prendas con ese filtro.</p>
-  <section id="policies" class="stack"></section>
-  <footer id="contact" class="card stack"></footer>
+
+<div class="print-head" id="printHead"></div>
+<main id="top">
+  <section class="hero" id="hero" aria-label="Portada">
+    <div class="hero-media" id="heroMedia" aria-hidden="true"></div>
+    <div class="hero-type">
+      <h1 id="heroName">SUKIVA</h1>
+      <div class="hero-foot">
+        <p id="heroLine">Ropa deportiva original, con existencia real.</p>
+        <a class="pill solid" href="#prendas">Ver prendas</a>
+      </div>
+    </div>
+  </section>
+
+  <section class="bento" id="bento" aria-label="Colecciones y condiciones"></section>
+
+  <section class="shop" id="prendas">
+    <div class="shop-head">
+      <h2>Prendas</h2>
+      <p class="muted" id="shopCount"></p>
+    </div>
+    <div class="filters" id="filters">
+      <div class="chips" id="cats" role="tablist" aria-label="Categorías"></div>
+      <input id="search" type="search" placeholder="Buscar prenda o color" aria-label="Buscar prenda o color" autocomplete="off">
+    </div>
+    <div class="look" id="grid" aria-live="polite"></div>
+    <p class="empty" id="empty" hidden></p>
+  </section>
+
+  <section class="terms" id="politicas" hidden>
+    <h2>Condiciones</h2>
+    <div id="policies"></div>
+  </section>
 </main>
-<div class="cartbar hidden no-print" id="cartbar"><button class="btn primary block" id="btnCart" type="button"></button></div>
+
+<footer class="foot">
+  <div class="foot-grid">
+    <div id="contact"></div>
+    <div class="foot-links">
+      <a href="#prendas">Prendas</a>
+      <a href="#politicas" id="footPol" hidden>Condiciones</a>
+      <button type="button" id="btnPdf">Descargar lista en PDF</button>
+    </div>
+  </div>
+  <p class="foot-mark" id="footMark" aria-hidden="true">SUKIVA</p>
+  <p class="muted small" id="updated"></p>
+</footer>
+
+<div class="scrim" id="scrim" hidden></div>
+<aside class="bag" id="bag" role="dialog" aria-modal="true" aria-label="Mi solicitud" hidden></aside>
+<div class="pdp" id="pdp" role="dialog" aria-modal="true" hidden></div>
+<div id="toasts" role="status" aria-live="polite"></div>
+
 <script src="supabase.js"></script>
 <script src="config.js"></script>
 <script src="common.js"></script>
-<script src="catalog.js"></script>
+<script src="store.js"></script>
 </body>
 </html>
