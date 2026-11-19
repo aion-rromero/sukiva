@@ -102,8 +102,6 @@
       loop(A, pick.filter((_, n) => n % 2 === 0).slice(0, 6).map(x => x[0]), '', 3600, { auto: true, eager: true });
       const odd = pick.filter((_, n) => n % 2 === 1).slice(0, 6); loop(B, (odd.length ? odd : pick).map(x => x[1] || x[0]), '', 3600, { auto: true, delay: 1800 });
     }
-    $('printHead').replaceChildren(logo ? h('img', { src: imgUrl(logo), alt: '' }) : null, h('b', {}, name + ' · Lista de precios'),
-      'Actualizada el ' + fmtDate(data.generated_at, true) + '. Precios y existencias sujetos a cambio.');
   }
 
   // ── bento: categorías con foto real + condiciones tomadas de la configuración
@@ -166,8 +164,7 @@
       h('div', { class: 'card-info' },
         h('button', { class: 'card-name', type: 'button', onclick: () => openProduct(p) }, p.name),
         h('span', { class: 'card-price' }, lo === hi ? money(lo) : 'Desde ' + money(lo)),
-        h('span', { class: 'card-colors' }, colors.length > 1 ? colors.length + ' colores' : colors[0] || p.category),
-        h('span', { class: 'card-colors print-only' }, 'Tallas: ' + (uniq(live.map(v => v.size)).join(', ') || 'agotado'))));
+        h('span', { class: 'card-colors' }, colors.length > 1 ? colors.length + ' colores' : colors[0] || p.category)));
     return el;
   }
 
@@ -385,8 +382,6 @@
   $('openBag').addEventListener('click', openBag);
   $('scrim').addEventListener('click', closeBag);
   document.addEventListener('keydown', e => { if (e.key !== 'Escape') return; if (!$('bag').hidden) closeBag(); else if (pdpProduct) closeProduct(); else if (openQa) openQa.close(); });
-  $('btnPdf').addEventListener('click', () => { filter = { cat: 'Todo', text: '' }; $('search').value = ''; renderFilters(); renderGrid();
-    document.querySelectorAll('#policies details').forEach(x => { x.open = true; }); window.print(); });
   if (!ready) { $('empty').hidden = false; $('empty').textContent = 'Tienda en configuración: falta conectar la base de datos (config.js).'; return; }
   load();
   document.addEventListener('visibilitychange', () => {
