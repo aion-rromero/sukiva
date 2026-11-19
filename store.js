@@ -3,6 +3,12 @@
 (() => {
   const { db, ready, h, money, fmtDate, toast, imgUrl } = SK;
   const $ = id => document.getElementById(id);
+  // replaceChildren nativo convierte null en "null" y los arreglos en texto; aquí se aplanan y filtran
+  // (no depende de la versión de common.js que esté publicada).
+  const nativeReplace = Element.prototype.replaceChildren;
+  Element.prototype.replaceChildren = function (...kids) {
+    return nativeReplace.apply(this, kids.flat(Infinity).filter(k => k != null && k !== false && k !== ''));
+  };
   let data = { products: [], settings: {}, policies: [], promotions: [], categories: [] };
   let filter = { cat: 'Todo', text: '' };
   let cart = [], requestKey = crypto.randomUUID(), openQa = null, pdpProduct = null, lastFocus = null;
