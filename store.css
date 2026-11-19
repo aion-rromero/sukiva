@@ -211,5 +211,9 @@ label.field { display: grid; gap: 6px; font-size: 13px; font-weight: 600; }
 .toast.bad { background: var(--alert); }
 
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } html { scroll-behavior: auto; } }
+/* La foto llena su marco sin depender de alturas en porcentaje */
+.card-media .main { position: absolute; inset: 0; display: block; }
+.pdp-gallery figure, .line .thumb { position: relative; overflow: hidden; }
+.pdp-gallery figure img, .line .thumb img { position: absolute; inset: 0; }
 /* La tienda no se imprime ni se guarda como PDF: al imprimir, la hoja sale en blanco. */
 @media print { body { display: none !important; } }
