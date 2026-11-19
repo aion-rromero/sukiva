@@ -4,6 +4,12 @@
   const { db, ready, h, money, fmtDate, today, toast, imgUrl, dialog, cfg } = SK;
   const $ = id => document.getElementById(id);
   const view = () => $('view');
+  // replaceChildren nativo convierte null en "null" y los arreglos en texto; aquí se aplanan y filtran
+  // (no depende de la versión de common.js que esté publicada).
+  const nativeReplace = Element.prototype.replaceChildren;
+  Element.prototype.replaceChildren = function (...kids) {
+    return nativeReplace.apply(this, kids.flat(Infinity).filter(k => k != null && k !== false && k !== ''));
+  };
   let role = null, session = null;
 
   const STATUS = { solicitud: 'Solicitud recibida', pendiente_confirmacion: 'Pendiente de confirmación', pendiente_anticipo: 'Pendiente de anticipo',
@@ -36,6 +42,72 @@
   const pwField = (k, label) => ({ k, label, type: 'password', help: 'Mínimo 12 caracteres' });
   const badge = (text, kind) => h('span', { class: 'badge ' + (kind || '') }, text);
   const stBadge = s => badge(STATUS[s] || s, STATUS_KIND[s]);
+
+  // ═════════════════════════ IMPRESIÓN, PDF Y EXPORTACIÓN
+  // Imprimir abre el diálogo del navegador: ahí se elige la impresora o "Guardar como PDF".
+  // Exportar genera un CSV (UTF-8) que Excel y Google Sheets abren directo.
+  let BRAND = { name: 'SUKIVA', logo: null };
+  const num = n => Number(n) || 0;
+  const slug = s => String(s).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 60) || 'sukiva';
+  function cellText(td) {
+    const c = td.cloneNode(true), src = [...td.querySelectorAll('select,input,textarea')];
+    [...c.querySelectorAll('select,input,textarea')].forEach((el, i) => { const o = src[i];
+      el.replaceWith(document.createTextNode(o.tagName === 'SELECT' ? (o.selectedOptions[0] ? o.selectedOptions[0].textContent : '') : o.type === 'checkbox' ? (o.checked ? 'Sí' : 'No') : o.value)); });
+    c.querySelectorAll('button').forEach(b => b.remove());
+    c.querySelectorAll('div').forEach(d => d.prepend(' · '));
+    return c.textContent.replace(/\s+/g, ' ').replace(/^ · /, '').trim();
+  }
+  function tableData(tbl) {
+    const rows = [...tbl.rows].map(tr => [...tr.cells].map(cellText)).filter(r => r.length > 1 || r[0] !== 'Sin registros');
+    if (!rows.length) return rows;
+    const keep = rows[0].map((_, i) => rows.some(r => r[i]));
+    return rows.map(r => r.filter((_, i) => keep[i]));
+  }
+  // Todo lo que hay en pantalla: indicadores y tablas, con el título de su tarjeta.
+  function sections(root) {
+    const out = [], kp = [...root.querySelectorAll('.kpi')].map(k => [k.children[0] ? k.children[0].textContent : '', k.querySelector('b') ? k.querySelector('b').textContent : '']);
+    if (kp.length) out.push({ title: 'Indicadores', rows: [['Indicador', 'Valor'], ...kp] });
+    for (const t of root.querySelectorAll('table')) {
+      if (t.closest('details:not([open])')) continue;
+      const card = t.closest('.card'), hd = card && card.querySelector('h2,h3'), rows = tableData(t);
+      if (rows.length > 1) out.push({ title: hd ? hd.textContent : '', rows });
+    }
+    return out;
+  }
+  function exportCSV(name, secs) {
+    // Importes como número; textos que empiezan con = + - @ se neutralizan para que Excel no los ejecute como fórmula.
+    const esc = v => { v = v == null ? '' : String(v); const m = v.match(/^(-?)\$([\d,]+(?:\.\d+)?)$/); if (m) v = m[1] + m[2].replace(/,/g, '');
+      if (/^[=+\-@\t\r]/.test(v) && !/^-?\d+(\.\d+)?$/.test(v)) v = "'" + v;
+      return /[",\n\r]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
+    const lines = [];
+    secs.forEach((s, i) => { if (i) lines.push(''); if (s.title && secs.length > 1) lines.push(esc(s.title)); s.rows.forEach(r => lines.push(r.map(esc).join(','))); });
+    const url = URL.createObjectURL(new Blob(['\ufeff' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' }));
+    const a = h('a', { href: url, download: slug(name) + '_' + today() + '.csv' }); document.body.append(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000); toast('Archivo exportado', 'ok');
+  }
+  const isNum = c => /^-?\$?[\d,]+(\.\d+)?%?$/.test(String(c));
+  const dataTable = (rows, cls) => h('table', { class: cls || '' }, h('thead', {}, h('tr', {}, rows[0].map((c, i) => h('th', { class: rows[1] && isNum(rows[1][i]) ? 'right' : '' }, c)))),
+    h('tbody', {}, rows.slice(1).map(r => h('tr', { class: r.strong ? 'strong' : '' }, r.map(c => h('td', { class: isNum(c) ? 'right' : '' }, c == null ? '' : String(c)))))));
+  const kv = (k, v) => v == null || v === '' ? null : h('div', {}, h('b', {}, k + ': '), String(v));
+  const pdKpis = list => h('div', { class: 'pd-kpis' }, list.map(([k, v]) => h('div', {}, h('span', {}, k), h('b', {}, String(v)))));
+  function printDoc(title, nodes, sub) {
+    document.querySelectorAll('.print-doc').forEach(x => x.remove());
+    const doc = h('div', { class: 'print-doc' },
+      h('header', {}, BRAND.logo ? h('img', { src: imgUrl(BRAND.logo), alt: BRAND.name }) : h('b', { class: 'pd-name' }, BRAND.name),
+        h('div', {}, h('h1', {}, title), sub ? h('div', {}, sub) : null, h('div', { class: 'pd-meta' }, 'Generado el ' + fmtDate(new Date().toISOString(), true)))),
+      nodes, h('footer', {}, BRAND.name));
+    document.body.append(doc); document.documentElement.classList.add('printing');
+    const done = () => { document.documentElement.classList.remove('printing'); doc.remove(); removeEventListener('afterprint', done); };
+    addEventListener('afterprint', done);
+    const img = doc.querySelector('header img'), go = () => setTimeout(() => window.print(), 50);
+    img && !img.complete ? (img.onload = img.onerror = go) : go();
+  }
+  const printSections = (title, secs, sub) => printDoc(title, secs.map(s => s.title === 'Indicadores' ? pdKpis(s.rows.slice(1)) : [s.title ? h('h2', {}, s.title) : null, dataTable(s.rows)]), sub);
+  // Botones que acompañan a cualquier pantalla o documento
+  const val = x => typeof x === 'function' ? x() : x;
+  const docTools = (title, getSecs, sub) => [
+    h('button', { class: 'btn sm', type: 'button', onclick: () => { const s = getSecs(); s.length ? printSections(val(title), s, val(sub)) : toast('No hay información para imprimir', 'bad'); } }, 'Imprimir / PDF'),
+    h('button', { class: 'btn sm', type: 'button', onclick: () => { const s = getSecs(); s.length ? exportCSV(val(title), s) : toast('No hay información para exportar', 'bad'); } }, 'Exportar a Excel')];
 
   function table(cols, rows, onRow) {
     return h('div', { class: 'table-wrap' }, h('table', {},
@@ -80,7 +152,7 @@
   }
   const head = (title, ...actions) => h('div', { class: 'page-head' },
     h('button', { class: 'btn sm menu-btn', type: 'button', onclick: () => $('sidebar').classList.toggle('open') }, '☰'),
-    h('h1', { class: 'grow' }, title), ...actions);
+    h('h1', { class: 'grow' }, title), ...actions, ...docTools(title, () => sections(view())));
 
   // CRUD genérico para catálogos simples
   async function crud(o) {
@@ -248,6 +320,53 @@
       [h('button', { class: 'btn', type: 'button', onclick: () => d.close() }, 'Cancelar'), save]);
   }
 
+  const orderSections = o => [
+    { title: 'Pedido ' + o.folio, rows: [['Dato', 'Valor'], ['Folio', o.folio], ['Fecha', fmtDate(o.created_at, true)], ['Estatus', STATUS[o.status] || o.status], ['Cliente', o.contact_name],
+      ['Teléfono', o.contact_phone], ['Correo', o.contact_email || ''], ['Canal', o.channel], ['Entrega', o.delivery_type === 'nacional' ? 'Envío nacional: ' + (o.shipping_address || '') : 'Entrega local / gimnasio'],
+      ['Subtotal', money(o.subtotal)], ['Descuento', money(o.discount)], ['Envío', money(o.shipping_cost)], ['Total', money(o.total)], ['Pagado', money(o.paid)], ['Saldo', money(num(o.total) - num(o.paid))]] },
+    { title: 'Prendas', rows: [['Prenda', 'Cantidad', 'Precio', 'Importe'], ...o.order_items.map(i => [i.description, String(i.qty), money(i.unit_price), money(i.qty * i.unit_price)])] },
+    ...(o.payments.length ? [{ title: 'Pagos', rows: [['Fecha', 'Método', 'Referencia', 'Importe'], ...o.payments.map(p => [fmtDate(p.paid_at, true), p.method, p.reference || '', money(p.amount)])] }] : []),
+    ...(o.shipments.length ? [{ title: 'Envíos', rows: [['Paquetería', 'Guía', 'Estatus'], ...o.shipments.map(s => [s.shipping_providers ? s.shipping_providers.name : '', s.tracking_number || '', s.status])] }] : [])];
+  function printOrder(o, seller) {
+    const s = orderSections(o), bal = num(o.total) - num(o.paid);
+    const tot = [['Subtotal', money(o.subtotal)], num(o.discount) ? ['Descuento', '-' + money(o.discount)] : null, num(o.shipping_cost) ? ['Envío', money(o.shipping_cost)] : null,
+      Object.assign(['Total', money(o.total)], { strong: true }), ['Pagado', money(o.paid)], Object.assign(['Saldo', money(bal)], { strong: true })].filter(Boolean);
+    printDoc('Pedido ' + o.folio, [
+      h('div', { class: 'pd-grid' },
+        h('div', {}, h('h3', {}, 'Cliente'), h('div', {}, o.contact_name), h('div', {}, o.contact_phone), o.contact_email ? h('div', {}, o.contact_email) : null,
+          h('div', {}, o.delivery_type === 'nacional' ? 'Envío nacional: ' + (o.shipping_address || '') : 'Entrega local / gimnasio')),
+        h('div', {}, h('h3', {}, 'Pedido'), kv('Fecha', fmtDate(o.created_at, true)), kv('Estatus', STATUS[o.status] || o.status), kv('Canal', o.channel), kv('Atendió', seller))),
+      dataTable(s[1].rows),
+      h('table', { class: 'pd-totals' }, h('tbody', {}, tot.map(r => h('tr', { class: r.strong ? 'strong' : '' }, h('td', {}, r[0]), h('td', {}, r[1]))))),
+      s.slice(2).map(x => [h('h2', {}, x.title), dataTable(x.rows)]),
+      o.customer_notes ? h('p', {}, h('b', {}, 'Nota del cliente: '), o.customer_notes) : null,
+      bal > 0 ? h('p', {}, 'Saldo pendiente de pago: ', h('b', {}, money(bal)), '.') : h('p', {}, 'Pedido pagado en su totalidad.')]);
+  }
+
+  // Estado de cuenta: cargos (pedidos) y abonos (pagos) de un cliente, con saldo corrido.
+  async function statement(c) {
+    const phone = String(c.phone || '').replace(/\D/g, '');
+    let q = db.from('orders').select('id,folio,created_at,status,total,paid,payments(amount,method,reference,paid_at)').order('created_at').limit(1000);
+    q = phone ? q.or('customer_id.eq.' + c.id + ',contact_phone.eq.' + phone) : q.eq('customer_id', c.id);
+    const orders = (await run(q)).filter(o => !['cancelado', 'devuelto'].includes(o.status));
+    const mv = [];
+    for (const o of orders) {
+      mv.push({ d: o.created_at, t: 'Pedido ' + o.folio + ' (' + (STATUS[o.status] || o.status) + ')', cargo: num(o.total), abono: 0 });
+      for (const p of o.payments || []) mv.push({ d: p.paid_at, t: 'Pago ' + o.folio + ' · ' + p.method + (p.reference ? ' · ' + p.reference : ''), cargo: 0, abono: num(p.amount) });
+    }
+    mv.sort((a, b) => String(a.d).localeCompare(String(b.d)));
+    let bal = 0; const rows = mv.map(m => { bal += m.cargo - m.abono; return [fmtDate(m.d, true), m.t, m.cargo ? money(m.cargo) : '', m.abono ? money(m.abono) : '', money(bal)]; });
+    const cargos = mv.reduce((a, m) => a + m.cargo, 0), abonos = mv.reduce((a, m) => a + m.abono, 0);
+    const secs = () => [{ title: 'Indicadores', rows: [['Indicador', 'Valor'], ['Pedidos', String(orders.length)], ['Total comprado', money(cargos)], ['Total pagado', money(abonos)], ['Saldo por pagar', money(cargos - abonos)]] },
+      { title: 'Movimientos', rows: [['Fecha', 'Concepto', 'Cargo', 'Abono', 'Saldo'], ...rows] }];
+    const title = 'Estado de cuenta · ' + c.full_name, sub = [c.phone, c.email].filter(Boolean).join(' · ');
+    dialog(title, h('div', { class: 'stack' },
+      h('div', { class: 'kpis' }, secs()[0].rows.slice(1).map(([k, v]) => h('div', { class: 'kpi' }, h('span', { class: 'muted small' }, k), h('b', {}, v)))),
+      rows.length ? h('div', { class: 'table-wrap' }, dataTable(secs()[1].rows)) : h('p', { class: 'muted' }, 'Este cliente aún no tiene pedidos.'),
+      h('p', { class: 'muted small' }, 'No incluye pedidos cancelados ni devueltos. Se toman los pedidos ligados al cliente o capturados con su teléfono.')),
+      rows.length ? docTools(title, secs, sub) : []);
+  }
+
   async function orderDetail(id, after) {
     const body = h('div', { class: 'stack' });
     const d = dialog('Pedido', body, []);
@@ -272,7 +391,9 @@
       const notes = h('textarea', { value: o.notes || '' });
       body.replaceChildren(
         h('div', { class: 'row' }, stBadge(o.status), badge(stockNote, o.stock_state === 'reserved' ? 'warn' : ''), h('span', { class: 'muted small' }, o.channel + ' · ' + fmtDate(o.created_at, true))),
-        closed ? null : h('div', {}, h('button', { class: 'btn sm primary', type: 'button', onclick: () => editOrder(o, load) }, 'Editar pedido')),
+        h('div', { class: 'row' }, closed ? null : h('button', { class: 'btn sm primary', type: 'button', onclick: () => editOrder(o, load) }, 'Editar pedido'),
+          h('button', { class: 'btn sm', type: 'button', onclick: () => printOrder(o, (staff.find(p => p.id === o.seller_id) || {}).full_name) }, 'Imprimir / PDF'),
+          h('button', { class: 'btn sm', type: 'button', onclick: () => exportCSV('pedido-' + o.folio, orderSections(o)) }, 'Exportar a Excel')),
         h('div', { class: 'card' }, h('b', {}, o.contact_name), h('div', {}, o.contact_phone, o.contact_email ? ' · ' + o.contact_email : ''),
           h('div', { class: 'muted' }, o.delivery_type === 'nacional' ? 'Envío nacional: ' + (o.shipping_address || '') : 'Entrega local / gimnasio'),
           o.customer_notes ? h('div', { class: 'notice small', style: 'margin-top:8px' }, 'Nota del cliente: ', o.customer_notes) : null),
@@ -444,6 +565,17 @@
         rows, p => purchaseDetail(p.id, fields))));
   }
 
+  const purchaseSections = p => {
+    const it = [...p.purchase_items].sort((a, b) => a.product_variants.sku.localeCompare(b.product_variants.sku)), total = it.reduce((a, i) => a + i.qty * num(i.unit_cost), 0);
+    return [
+      { title: 'Datos de la compra', rows: [['Dato', 'Valor'], ['Folio', p.folio], ['Proveedor', p.suppliers.name], ['Fecha de compra', fmtDate(p.purchase_date)], ['Factura / orden', p.reference || ''],
+        ['Estatus', p.status], ['Moneda', p.currency], ['Tipo de cambio', String(p.fx_rate)], ['Envío pagado (MXN)', money(p.shipping_cost)], ['Aranceles / otros (MXN)', money(p.other_costs)],
+        ['Piezas', String(it.reduce((a, i) => a + i.qty, 0))], ['Costo total (MXN)', money(total)], ['Observaciones', p.notes || '']] },
+      { title: 'Partidas', rows: [['SKU', 'Producto', 'Cantidad', 'Recibidas', 'Precio ' + p.currency, 'Costo final MXN', 'Importe MXN'],
+        ...it.map(i => [i.product_variants.sku, i.product_variants.products.name, String(i.qty), String(i.qty_received), Number(i.unit_price).toFixed(2), money(i.unit_cost), money(i.qty * num(i.unit_cost))]),
+        Object.assign(['', 'Total', String(it.reduce((a, i) => a + i.qty, 0)), String(it.reduce((a, i) => a + i.qty_received, 0)), '', '', money(total)], { strong: true })] }];
+  };
+
   async function purchaseDetail(id, fields) {
     const body = h('div', { class: 'stack' });
     const d = dialog('Compra', body, []);
@@ -482,6 +614,7 @@
           canReceive ? h('button', { class: 'btn primary', type: 'button', onclick: async () => {
             if (confirm('¿Recibir TODAS las piezas pendientes? El inventario sube de inmediato.')) { await run(db.rpc('purchase_receive_all', { purchase: id }), 'Mercancía recibida'); load(); } } }, 'Recibir todo lo pendiente') : null,
           p.status === 'recibida' ? h('button', { class: 'btn primary', type: 'button', onclick: () => correctPurchase(p, variants, fields, load) }, 'Editar compra') : null,
+          docTools('Compra ' + p.folio, () => purchaseSections(p), p.suppliers.name + ' · ' + p.status),
           editable ? h('button', { class: 'btn danger', type: 'button', onclick: () => { if (confirm('¿Cancelar la compra?')) st('cancelada'); } }, 'Cancelar compra') : null));
     }
     await load();
@@ -530,7 +663,8 @@
   async function pageClientes() {
     view().replaceChildren(head('Clientes'), await crud({ table: 'customers', title: 'Directorio', noun: 'cliente', order: 'full_name', canWrite: true, reload: pageClientes,
       cols: [{ label: 'Nombre', get: c => c.full_name }, { label: 'Teléfono', get: c => c.phone }, { label: 'Correo', get: c => c.email || '—' }, { label: 'Notas', get: c => c.notes || '' },
-        { label: 'Alta', get: c => fmtDate(c.created_at) }],
+        { label: 'Alta', get: c => fmtDate(c.created_at) },
+        { label: '', nowrap: true, get: c => h('button', { class: 'btn sm', type: 'button', onclick: e => { e.stopPropagation(); statement(c); } }, 'Estado de cuenta') }],
       fields: [{ k: 'full_name', label: 'Nombre completo', required: true }, { k: 'phone', label: 'Teléfono (solo dígitos)', required: true }, { k: 'email', label: 'Correo', type: 'email' },
         { k: 'notes', label: 'Notas', type: 'textarea', wide: true }] }));
   }
@@ -728,10 +862,98 @@
     await load();
   }
 
+  // ═════════════════════════ REPORTES
+  // Cada reporte devuelve columnas y filas con valores crudos; la pantalla los formatea y la exportación los conserva como número.
+  const dayStart = d => new Date(d + 'T00:00:00').toISOString(), dayEnd = d => new Date(d + 'T23:59:59.999').toISOString();
+  const LIVE = '(cancelado,devuelto)';
+  const REPORTS = [
+    { id: 'ventas', label: 'Ventas por pedido', note: 'Pedidos creados en el periodo. No incluye cancelados ni devueltos.', async run(f, t) {
+        const [r, staff] = await Promise.all([run(db.from('orders').select('folio,created_at,contact_name,channel,status,subtotal,discount,shipping_cost,total,paid,seller_id')
+          .gte('created_at', dayStart(f)).lte('created_at', dayEnd(t)).not('status', 'in', LIVE).order('created_at').limit(1000)), staffList()]);
+        const nm = Object.fromEntries(staff.map(p => [p.id, p.full_name])), s = k => r.reduce((a, o) => a + num(o[k]), 0);
+        return { cols: [['Folio'], ['Fecha'], ['Cliente'], ['Canal'], ['Vendedor(a)'], ['Estatus'], ['Subtotal', 'm'], ['Descuento', 'm'], ['Envío', 'm'], ['Total', 'm'], ['Cobrado', 'm'], ['Saldo', 'm']],
+          rows: r.map(o => [o.folio, fmtDate(o.created_at, true), o.contact_name, o.channel, o.seller_id ? nm[o.seller_id] || 'Otro usuario' : 'Sin asignar', STATUS[o.status] || o.status,
+            num(o.subtotal), num(o.discount), num(o.shipping_cost), num(o.total), num(o.paid), num(o.total) - num(o.paid)]),
+          total: ['Total', '', '', '', '', '', s('subtotal'), s('discount'), s('shipping_cost'), s('total'), s('paid'), s('total') - s('paid')],
+          kpis: [['Pedidos', r.length], ['Venta', money(s('total'))], ['Cobrado', money(s('paid'))], ['Saldo por cobrar', money(s('total') - s('paid'))]] }; } },
+    { id: 'productos', label: 'Ventas por producto', note: 'Prendas de pedidos creados en el periodo, sin cancelados ni devueltos. Utilidad bruta = venta − costo, antes de descuentos, comisiones y envíos.', async run(f, t) {
+        const r = await run(db.from('order_items').select('description,qty,unit_price,unit_cost,orders!inner(created_at,status)')
+          .gte('orders.created_at', dayStart(f)).lte('orders.created_at', dayEnd(t)).not('orders.status', 'in', LIVE).limit(1000));
+        const g = new Map();
+        for (const i of r) { const x = g.get(i.description) || { q: 0, v: 0, c: 0 }; x.q += num(i.qty); x.v += i.qty * num(i.unit_price); x.c += i.qty * num(i.unit_cost); g.set(i.description, x); }
+        const rows = [...g].map(([d, x]) => [d, x.q, x.v, x.c, x.v - x.c, x.v ? Math.round((x.v - x.c) / x.v * 1000) / 10 + '%' : '']).sort((a, b) => b[2] - a[2]);
+        const s = i => rows.reduce((a, x) => a + x[i], 0);
+        return { cols: [['Prenda'], ['Piezas', 'n'], ['Venta', 'm'], ['Costo', 'm'], ['Utilidad bruta', 'm'], ['Margen']], rows, raw: r.length,
+          total: ['Total', s(1), s(2), s(3), s(4), s(2) ? Math.round(s(4) / s(2) * 1000) / 10 + '%' : ''],
+          kpis: [['Piezas vendidas', s(1)], ['Venta', money(s(2))], ['Costo', money(s(3))], ['Utilidad bruta', money(s(4))]] }; } },
+    { id: 'cobranza', label: 'Cobranza (pagos recibidos)', note: 'Pagos registrados en el periodo, por fecha de pago.', async run(f, t) {
+        const r = await run(db.from('payments').select('paid_at,amount,method,reference,orders(folio,contact_name)').gte('paid_at', dayStart(f)).lte('paid_at', dayEnd(t)).order('paid_at').limit(1000));
+        const by = {}; for (const p of r) by[p.method] = (by[p.method] || 0) + num(p.amount);
+        const tot = r.reduce((a, p) => a + num(p.amount), 0);
+        return { cols: [['Fecha'], ['Pedido'], ['Cliente'], ['Método'], ['Referencia'], ['Importe', 'm']],
+          rows: r.map(p => [fmtDate(p.paid_at, true), p.orders ? p.orders.folio : '', p.orders ? p.orders.contact_name : '', p.method, p.reference || '', num(p.amount)]),
+          total: ['Total', '', '', '', '', tot], kpis: [['Pagos', r.length], ['Cobrado', money(tot)], ...Object.entries(by).map(([m, v]) => [m, money(v)])] }; } },
+    { id: 'por-cobrar', label: 'Cuentas por cobrar', now: true, note: 'Pedidos vigentes con saldo pendiente al día de hoy. No depende del periodo.', async run() {
+        const r = (await run(db.from('orders').select('folio,created_at,contact_name,contact_phone,status,total,paid').not('status', 'in', LIVE).order('created_at').limit(1000))).filter(o => num(o.total) - num(o.paid) > 0.004);
+        const s = k => r.reduce((a, o) => a + num(o[k]), 0);
+        return { cols: [['Folio'], ['Fecha'], ['Cliente'], ['Teléfono'], ['Estatus'], ['Días', 'n'], ['Total', 'm'], ['Pagado', 'm'], ['Saldo', 'm']],
+          rows: r.map(o => [o.folio, fmtDate(o.created_at), o.contact_name, o.contact_phone, STATUS[o.status] || o.status, Math.floor((Date.now() - new Date(o.created_at)) / 864e5), num(o.total), num(o.paid), num(o.total) - num(o.paid)]),
+          total: ['Total', '', '', '', '', '', s('total'), s('paid'), s('total') - s('paid')], kpis: [['Pedidos con saldo', r.length], ['Saldo por cobrar', money(s('total') - s('paid'))]] }; } },
+    { id: 'inventario', label: 'Inventario valorizado', now: true, note: 'Existencias al día de hoy. No depende del periodo.', async run() {
+        const r = await run(db.from('product_variants').select('sku,color,size,price,avg_cost,stock_on_hand,stock_reserved,products(name)').is('deleted_at', null).order('sku').limit(1000));
+        const rows = r.map(v => [v.sku, v.products ? v.products.name : '', [v.color, v.size].filter(Boolean).join(' · '), v.stock_on_hand, v.stock_reserved, v.stock_on_hand - v.stock_reserved,
+          num(v.avg_cost), v.stock_on_hand * num(v.avg_cost), num(v.price), v.stock_on_hand * num(v.price)]);
+        const s = i => rows.reduce((a, x) => a + x[i], 0);
+        return { cols: [['SKU'], ['Producto'], ['Color · talla'], ['Física', 'n'], ['Comprometida', 'n'], ['Disponible', 'n'], ['Costo prom.', 'm'], ['Valor a costo', 'm'], ['Precio', 'm'], ['Valor a precio', 'm']], rows,
+          total: ['Total', '', '', s(3), s(4), s(5), '', s(7), '', s(9)], kpis: [['Piezas', s(3)], ['Disponibles', s(5)], ['Valor a costo', money(s(7))], ['Valor a precio de venta', money(s(9))]] }; } },
+    { id: 'movimientos', label: 'Movimientos de inventario', note: 'Entradas y salidas registradas en el periodo.', async run(f, t) {
+        const r = await run(db.from('inventory_movements').select('created_at,type,qty,unit_cost,balance,note,product_variants(sku)').gte('created_at', dayStart(f)).lte('created_at', dayEnd(t)).order('id').limit(1000));
+        return { cols: [['Fecha'], ['SKU'], ['Tipo'], ['Cantidad', 'n'], ['Costo unitario', 'm'], ['Saldo', 'n'], ['Nota']],
+          rows: r.map(m => [fmtDate(m.created_at, true), m.product_variants ? m.product_variants.sku : '', MOVES[m.type] || m.type, m.qty, num(m.unit_cost), m.balance, m.note || '']),
+          kpis: [['Movimientos', r.length], ['Piezas que entraron', r.reduce((a, m) => a + Math.max(m.qty, 0), 0)], ['Piezas que salieron', r.reduce((a, m) => a + Math.max(-m.qty, 0), 0)]] }; } },
+    { id: 'compras', label: 'Compras de mercancía', note: 'Compras con fecha de compra en el periodo. No incluye canceladas.', async run(f, t) {
+        const r = await run(db.from('purchases').select('folio,purchase_date,reference,currency,status,shipping_cost,other_costs,suppliers(name),purchase_items(qty,qty_received,unit_cost)')
+          .gte('purchase_date', f).lte('purchase_date', t).neq('status', 'cancelada').order('purchase_date').limit(1000));
+        const rows = r.map(p => [p.folio, fmtDate(p.purchase_date), p.suppliers ? p.suppliers.name : '', p.reference || '', p.currency, p.status, p.purchase_items.reduce((a, i) => a + i.qty, 0),
+          p.purchase_items.reduce((a, i) => a + i.qty_received, 0), p.purchase_items.reduce((a, i) => a + i.qty * num(i.unit_cost), 0)]);
+        const s = i => rows.reduce((a, x) => a + x[i], 0);
+        return { cols: [['Folio'], ['Fecha'], ['Proveedor'], ['Referencia'], ['Moneda'], ['Estatus'], ['Piezas', 'n'], ['Recibidas', 'n'], ['Costo total MXN', 'm']], rows,
+          total: ['Total', '', '', '', '', '', s(6), s(7), s(8)], kpis: [['Compras', r.length], ['Piezas', s(6)], ['Costo total', money(s(8))]] }; } }];
+
+  async function pageReportes() {
+    const kind = h('select', { style: 'width:auto' }, REPORTS.map(r => h('option', { value: r.id }, r.label)));
+    const from = h('input', { type: 'date', value: today().slice(0, 8) + '01' }), to = h('input', { type: 'date', value: today() });
+    const out = h('div', { class: 'stack' }); let cur = null, seq = 0;
+    const fmt = (v, type) => v === '' || v == null ? '' : type === 'm' ? money(v) : String(v);
+    const secs = () => !cur ? [] : [{ title: 'Indicadores', rows: [['Indicador', 'Valor'], ...cur.d.kpis.map(([k, v]) => [k, String(v)])] },
+      { title: cur.r.label, rows: [cur.d.cols.map(c => c[0]), ...cur.d.rows.map(r => r.map((v, i) => fmt(v, cur.d.cols[i][1]))),
+        ...(cur.d.total && cur.d.rows.length ? [Object.assign(cur.d.total.map((v, i) => fmt(v, cur.d.cols[i][1])), { strong: true })] : [])] }];
+    const period = () => cur && cur.r.now ? 'Al ' + fmtDate(today()) : 'Del ' + fmtDate(from.value) + ' al ' + fmtDate(to.value);
+    async function load() {
+      const r = REPORTS.find(x => x.id === kind.value), n = ++seq;
+      from.disabled = to.disabled = !!r.now;
+      if (!r.now && from.value > to.value) return toast('La fecha inicial es posterior a la final', 'bad');
+      out.replaceChildren(h('p', { class: 'muted' }, 'Calculando…'));
+      const d = await r.run(from.value, to.value); if (n !== seq) return;
+      cur = { r, d }; const s = secs()[1].rows;
+      out.replaceChildren(
+        h('div', { class: 'kpis' }, d.kpis.map(([k, v]) => h('div', { class: 'kpi' }, h('span', { class: 'muted small' }, k), h('b', {}, String(v))))),
+        h('div', { class: 'card stack' }, h('div', { class: 'row' }, h('h2', { class: 'grow' }, r.label), h('span', { class: 'muted small' }, period())),
+          d.rows.length ? h('div', { class: 'table-wrap' }, dataTable(s, 'report')) : h('p', { class: 'muted' }, 'No hay registros en este periodo.'),
+          h('p', { class: 'muted small' }, r.note + ((d.raw || d.rows.length) >= 1000 ? ' Se alcanzó el tope de 1,000 registros: acota el periodo para ver el total completo.' : ''))));
+    }
+    kind.addEventListener('change', load); from.addEventListener('change', load); to.addEventListener('change', load);
+    view().replaceChildren(h('div', { class: 'page-head' },
+      h('button', { class: 'btn sm menu-btn', type: 'button', onclick: () => $('sidebar').classList.toggle('open') }, '☰'), h('h1', { class: 'grow' }, 'Reportes'),
+      kind, h('label', { class: 'row small muted' }, 'Del', from), h('label', { class: 'row small muted' }, 'al', to),
+      docTools(() => 'Reporte · ' + (cur ? cur.r.label : ''), () => cur && cur.d.rows.length ? secs() : [], period)), out);
+    await load();
+  }
+
   // ═════════════════════════ ARRANQUE
   const PAGES = [
     { id: 'dashboard', label: 'Dashboard', admin: true, fn: pageDashboard }, { id: 'pedidos', label: 'Pedidos', fn: pagePedidos },
-    { id: 'comisiones', label: 'Comisiones', fn: pageComisiones },
+    { id: 'comisiones', label: 'Comisiones', fn: pageComisiones }, { id: 'reportes', label: 'Reportes', admin: true, fn: pageReportes },
     { id: 'productos', label: 'Productos', admin: true, fn: pageProductos }, { id: 'inventario', label: 'Inventario', admin: true, fn: pageInventario },
     { id: 'compras', label: 'Compras', admin: true, fn: pageCompras }, { id: 'clientes', label: 'Clientes', fn: pageClientes },
     { id: 'politicas', label: 'Políticas', admin: true, fn: pagePoliticas }, { id: 'influencers', label: 'Influencers', admin: true, fn: pageInfluencers },
@@ -751,6 +973,7 @@
     try {
       const { data } = await db.rpc('get_catalog');
       const path = data && data.settings && data.settings.logo_path, name = (data && data.settings && data.settings.business_name) || 'SUKIVA';
+      BRAND = { name, logo: path || null };
       document.querySelectorAll('.brand').forEach(el => {
         const sub = el.querySelector('span');
         el.replaceChildren(path ? h('img', { src: imgUrl(path), alt: name }) : name, sub || '');

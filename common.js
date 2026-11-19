@@ -5,6 +5,12 @@ window.SK = (() => {
   const ready = /^https:\/\/[a-z0-9-]+\.supabase\.co$/.test(cfg.supabaseUrl || '') && !!cfg.supabaseKey;
   const db = ready ? supabase.createClient(cfg.supabaseUrl, cfg.supabaseKey) : null;
 
+  // replaceChildren nativo convierte null en el texto "null" y los arreglos en cadenas: aquí se filtran y aplanan.
+  const nativeReplace = Element.prototype.replaceChildren;
+  Element.prototype.replaceChildren = function (...kids) {
+    return nativeReplace.apply(this, kids.flat(Infinity).filter(k => k != null && k !== false && k !== ''));
+  };
+
   function h(tag, attrs, ...kids) {
     const el = document.createElement(tag);
     for (const [k, v] of Object.entries(attrs || {})) {
