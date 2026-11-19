@@ -197,6 +197,57 @@
       } }, 'Agregar')), list], [save]);
   }
 
+  // Corrección de un pedido: datos del cliente y entrega siempre; prendas solo si aún no salió de inventario.
+  async function editOrder(o, after) {
+    const canItems = ['none', 'reserved'].includes(o.stock_state);
+    const variants = canItems ? await run(db.rpc('staff_variants')) : [];
+    const chan = [['gym', 'Gimnasio'], ['whatsapp', 'WhatsApp'], ['instagram', 'Instagram'], ['otro', 'Otro']];
+    if (o.channel === 'catalogo') chan.unshift(['catalogo', 'Catálogo (solicitud en línea)']);
+    const f = form([
+      { k: 'full_name', label: 'Nombre completo', required: true }, { k: 'phone', label: 'Teléfono (10 dígitos)', type: 'tel' },
+      { k: 'email', label: 'Correo (opcional)', type: 'email' }, { k: 'channel', label: 'Canal', type: 'select', options: chan },
+      { k: 'delivery_type', label: 'Entrega', type: 'select', options: [['local', 'Local / gimnasio'], ['nacional', 'Envío nacional']] },
+      { k: 'shipping_address', label: 'Dirección (si es envío)', type: 'textarea', wide: true }, { k: 'notes', label: 'Notas internas', type: 'textarea', wide: true }],
+      { full_name: o.contact_name, phone: o.contact_phone, email: o.contact_email, channel: o.channel, delivery_type: o.delivery_type, shipping_address: o.shipping_address, notes: o.notes });
+    const rows = o.order_items.map(i => ({ variant_id: i.variant_id, description: i.description, qty: i.qty, unit_price: Number(i.unit_price) }));
+    const original = JSON.stringify(rows.map(r => [r.variant_id, r.qty]).sort());
+    const list = h('div', {});
+    const draw = () => list.replaceChildren(table([
+      { label: 'Prenda', get: r => r.description },
+      { label: 'Cant.', get: r => { const i = h('input', { type: 'number', min: 1, value: r.qty, style: 'width:80px' }); i.addEventListener('input', () => { r.qty = Number(i.value); tot.textContent = total(); }); return i; } },
+      { label: 'Precio', right: true, get: r => money(r.unit_price) },
+      { label: '', get: r => h('button', { class: 'btn sm danger', type: 'button', onclick: () => { rows.splice(rows.indexOf(r), 1); draw(); } }, 'Quitar') }], rows), tot);
+    const total = () => 'Nuevo subtotal: ' + money(rows.reduce((a, r) => a + r.qty * r.unit_price, 0));
+    const tot = h('p', { class: 'right', style: 'font-weight:700' }, '');
+    const sel = h('select', {}, variants.map(v => h('option', { value: v.id, disabled: v.available <= 0 },
+      v.product + ' · ' + [v.color, v.size].filter(Boolean).join(' · ') + ' — ' + money(v.price) + ' (' + v.available + ' disp.)')));
+    const nq = h('input', { type: 'number', min: 1, value: 1, style: 'width:80px' });
+    draw(); tot.textContent = total();
+    const save = h('button', { class: 'btn primary', type: 'button', onclick: async () => {
+      const payload = f.get();
+      for (const k of ['email', 'shipping_address', 'notes']) if (payload[k] == null) payload[k] = '';
+      if (canItems) {
+        if (!rows.length) return toast('El pedido debe conservar al menos una prenda', 'bad');
+        if (rows.some(r => !(r.qty >= 1))) return toast('Revisa las cantidades', 'bad');
+        if (JSON.stringify(rows.map(r => [r.variant_id, r.qty]).sort()) !== original) payload.items = rows.map(r => ({ variant_id: r.variant_id, qty: r.qty }));
+      }
+      save.disabled = true;
+      try { await run(db.rpc('order_update', { order_id: o.id, payload }), 'Cambios guardados'); d.close(); after(); }
+      catch { /* mostrado */ } finally { save.disabled = false; }
+    } }, 'Guardar cambios');
+    const d = dialog('Editar pedido ' + o.folio, [f.el, h('h3', {}, 'Prendas'),
+      canItems ? [list, h('div', { class: 'row' }, h('div', { class: 'grow' }, sel), nq, h('button', { class: 'btn', type: 'button', onclick: () => {
+          const v = variants.find(x => x.id === sel.value), q = Number(nq.value);
+          if (!v || !(q >= 1)) return;
+          if (rows.some(r => r.variant_id === v.id)) return toast('Esa prenda ya está en el pedido: cambia su cantidad', 'bad');
+          rows.push({ variant_id: v.id, description: v.product + ' · ' + [v.color, v.size].filter(Boolean).join(' · '), qty: q, unit_price: Number(v.price) }); draw(); tot.textContent = total();
+        } }, 'Agregar prenda')),
+        h('p', { class: 'muted small' }, 'Las prendas que ya estaban conservan su precio; las nuevas entran al precio actual. El descuento y el envío se mantienen: ajústalos después en "Actualizar importes" si hace falta.' +
+          (o.stock_state === 'reserved' ? ' El inventario apartado se ajusta solo.' : ''))]
+        : h('div', { class: 'notice small' }, 'Este pedido ya salió de inventario (Enviado o Entregado): se pueden corregir los datos, pero no las prendas. Para cambiar prendas, regístralo como Devuelto y captura uno nuevo.')],
+      [h('button', { class: 'btn', type: 'button', onclick: () => d.close() }, 'Cancelar'), save]);
+  }
+
   async function orderDetail(id, after) {
     const body = h('div', { class: 'stack' });
     const d = dialog('Pedido', body, []);
@@ -221,6 +272,7 @@
       const notes = h('textarea', { value: o.notes || '' });
       body.replaceChildren(
         h('div', { class: 'row' }, stBadge(o.status), badge(stockNote, o.stock_state === 'reserved' ? 'warn' : ''), h('span', { class: 'muted small' }, o.channel + ' · ' + fmtDate(o.created_at, true))),
+        closed ? null : h('div', {}, h('button', { class: 'btn sm primary', type: 'button', onclick: () => editOrder(o, load) }, 'Editar pedido')),
         h('div', { class: 'card' }, h('b', {}, o.contact_name), h('div', {}, o.contact_phone, o.contact_email ? ' · ' + o.contact_email : ''),
           h('div', { class: 'muted' }, o.delivery_type === 'nacional' ? 'Envío nacional: ' + (o.shipping_address || '') : 'Entrega local / gimnasio'),
           o.customer_notes ? h('div', { class: 'notice small', style: 'margin-top:8px' }, 'Nota del cliente: ', o.customer_notes) : null),
@@ -270,7 +322,7 @@
         h('label', { class: 'field' }, 'Notas internas', notes),
         h('div', {}, h('button', { class: 'btn sm', type: 'button', onclick: () => run(db.from('orders').update({ notes: notes.value || null }).eq('id', id), 'Notas guardadas') }, 'Guardar notas')),
         h('details', {}, h('summary', { class: 'muted' }, 'Historial del pedido'), table([{ label: 'Fecha', get: x => fmtDate(x.changed_at, true) },
-          { label: 'Cambio', get: x => (x.from_status ? STATUS[x.from_status] + ' → ' : '') + STATUS[x.to_status] }, { label: 'Nota', get: x => x.note || '' }],
+          { label: 'Cambio', get: x => (x.from_status && x.from_status !== x.to_status ? STATUS[x.from_status] + ' → ' : '') + STATUS[x.to_status] }, { label: 'Nota', get: x => x.note || '' }],
           o.order_status_history.sort((a, b) => a.id - b.id))));
     }
     await load();
@@ -326,16 +378,16 @@
       extra.replaceChildren(
         h('div', { class: 'row' }, h('h3', { class: 'grow' }, 'Variantes (color / talla)'), h('button', { class: 'btn sm', type: 'button', onclick: () => editVariant(null) }, '+ Variante')),
         table([{ label: 'SKU', nowrap: true, get: v => v.sku }, { label: 'Color', get: v => v.color || '—' }, { label: 'Talla', get: v => v.size || '—' },
-          { label: 'Precio', right: true, get: v => money(v.price) }, { label: 'Costo prom.', right: true, get: v => money(v.avg_cost) },
+          { label: 'Precio', right: true, get: v => money(v.price) }, { label: 'Costo prom.', right: true, get: v => Number(v.avg_cost) > 0 ? money(v.avg_cost) : badge('Sin compra', 'warn') },
           { label: 'Exist.', right: true, get: v => v.stock_on_hand }, { label: 'Catálogo', get: v => !v.active ? badge('Inactiva', 'bad') : v.catalog_visible ? badge('Visible', 'ok') : badge('Oculta') }], vars, editVariant),
-        h('p', { class: 'muted small' }, 'Las existencias no se editan aquí: entran por Compras y se mueven por Pedidos o Inventario.'),
+        h('p', { class: 'muted small' }, 'Las existencias y el costo promedio no se capturan aquí: se registran solos al recibir la prenda en Compras (compra nueva, o "Editar compra" → "Agregar partida" en una ya recibida). Una variante marcada "Sin compra" todavía no ha entrado en ninguna compra.'),
         h('h3', {}, 'Fotografías'),
         h('div', { class: 'thumbs' }, imgs.map(i => h('figure', {}, h('img', { src: imgUrl(i.storage_path), alt: '' }), h('figcaption', { class: 'small muted' }, i.color || 'Todos'),
           h('button', { class: 'btn sm danger', type: 'button', 'aria-label': 'Eliminar foto', onclick: async () => {
             await run(db.from('product_images').delete().eq('id', i.id)); await db.storage.from('product-images').remove([i.storage_path]); refresh(); } }, '✕')))),
         h('div', { class: 'row' }, h('span', { class: 'small muted' }, 'Aplican a:'), imgColor, h('div', { class: 'grow' }, file)));
       function editVariant(v) {
-        const cost = h('input', { type: 'number', step: '0.01', placeholder: 'Costo final MXN', value: v && Number(v.avg_cost) ? v.avg_cost : '' });
+        const cost = h('input', { type: 'number', step: '0.01', placeholder: 'Costo de referencia MXN (no se guarda)', value: v && Number(v.avg_cost) ? v.avg_cost : '' });
         const vf = formDialog(v ? 'Variante ' + v.sku : 'Nueva variante', [
           { k: 'sku', label: 'SKU (MAYÚSCULAS, números y guiones)', required: true }, { k: 'color', label: 'Color' }, { k: 'size', label: 'Talla (ej. S / Regular)' },
           { k: 'price', label: 'Precio único', type: 'number', step: '1', required: true }, { k: 'stock_min', label: 'Existencia mínima', type: 'number', def: 0 },
@@ -345,7 +397,8 @@
           h('div', { class: 'row' }, h('div', { class: 'grow' }, cost), h('button', { class: 'btn sm', type: 'button', onclick: async () => {
             if (!(Number(cost.value) > 0)) return toast('Escribe el costo final de la pieza', 'bad');
             vf.inputs.price.value = await run(db.rpc('calc_price', { cost: Number(cost.value), markup: Number(cat.markup_pct) }));
-          } }, 'Sugerir precio (cotizador: +' + Math.round(cat.markup_pct * 100) + '%)')));
+          } }, 'Sugerir precio (cotizador: +' + Math.round(cat.markup_pct * 100) + '%)'),
+            h('p', { class: 'muted small', style: 'flex-basis:100%' }, 'Este costo solo sirve para calcular el precio sugerido. El costo real de la prenda se registra en Compras.')));
       }
     }
     refresh();
@@ -510,12 +563,14 @@
   // ═════════════════════════ INFLUENCERS
   async function pageInfluencers() {
     const [profiles, gifts, variants] = await Promise.all([run(db.from('influencer_profiles').select('*').order('name')),
-      run(db.from('influencer_gifts').select('*, influencer_profiles(name), product_variants(sku)').order('created_at', { ascending: false })),
-      run(db.from('product_variants').select('id, sku, stock_on_hand, stock_reserved, avg_cost').is('deleted_at', null).order('sku'))]);
+      run(db.from('influencer_gifts').select('*, influencer_profiles(name), product_variants(sku, color, size, products(name))').order('created_at', { ascending: false })),
+      run(db.from('product_variants').select('id, sku, color, size, stock_on_hand, stock_reserved, avg_cost, products(name)').is('deleted_at', null).order('sku'))]);
+    const vName = v => v.products.name + ' · ' + ([v.color, v.size].filter(Boolean).join(' · ') || v.sku);
+    variants.sort((a, b) => vName(a).localeCompare(vName(b)));
     const totalCost = gifts.reduce((a, g) => a + g.qty * g.unit_cost + Number(g.shipping_cost), 0), sales = gifts.reduce((a, g) => a + Number(g.sales_attributed || 0), 0);
     view().replaceChildren(head('Influencers', h('button', { class: 'btn primary', type: 'button', disabled: !profiles.length, onclick: () => formDialog('Registrar obsequio', [
       { k: 'influencer', label: 'Influencer', type: 'select', options: profiles.map(p => [p.id, p.name]) },
-      { k: 'variant', label: 'Prenda', type: 'select', options: variants.filter(v => v.stock_on_hand - v.stock_reserved > 0).map(v => [v.id, v.sku + ' (' + (v.stock_on_hand - v.stock_reserved) + ' disp. · costo ' + money(v.avg_cost) + ')']) },
+      { k: 'variant', label: 'Prenda', type: 'select', options: variants.filter(v => v.stock_on_hand - v.stock_reserved > 0).map(v => [v.id, vName(v) + ' (' + (v.stock_on_hand - v.stock_reserved) + ' disp. · costo ' + money(v.avg_cost) + ')']) },
       { k: 'qty', label: 'Piezas', type: 'number', min: 1, def: 1 }, { k: 'shipping', label: 'Costo de envío', type: 'number', step: '0.01', def: 0 }, { k: 'note', label: 'Nota', wide: true }], {},
       async v => { await run(db.rpc('gift_register', v), 'Obsequio registrado y descontado de inventario'); pageInfluencers(); }) }, '+ Registrar obsequio')),
       h('div', { class: 'kpis' }, h('div', { class: 'kpi' }, h('span', { class: 'muted small' }, 'Piezas obsequiadas'), h('b', {}, gifts.reduce((a, g) => a + g.qty, 0))),
@@ -532,7 +587,7 @@
           { k: 'city', label: 'Ciudad' }, { k: 'contact', label: 'Contacto' },
           { k: 'status', label: 'Estatus', type: 'select', options: ['prospecto', 'contactada', 'aceptó', 'enviado', 'publicó', 'descartada'].map(s => [s, s]) }, { k: 'notes', label: 'Notas', type: 'textarea', wide: true }] }),
       h('div', { class: 'card stack' }, h('h2', {}, 'Obsequios y resultados'), table([{ label: 'Fecha', get: g => fmtDate(g.sent_at) }, { label: 'Influencer', get: g => g.influencer_profiles.name },
-        { label: 'Prenda', get: g => g.qty + ' × ' + g.product_variants.sku }, { label: 'Costo', right: true, get: g => money(g.qty * g.unit_cost + Number(g.shipping_cost)) },
+        { label: 'Prenda', get: g => [g.qty + ' × ' + vName(g.product_variants), h('div', { class: 'muted small' }, g.product_variants.sku)] }, { label: 'Costo', right: true, get: g => money(g.qty * g.unit_cost + Number(g.shipping_cost)) },
         { label: 'Publicaciones', right: true, get: g => g.posts_count }, { label: 'Alcance', right: true, get: g => g.reach != null ? g.reach.toLocaleString('es-MX') : '—' },
         { label: 'Ventas atribuidas', right: true, get: g => g.sales_attributed != null ? money(g.sales_attributed) : '—' }], gifts,
         g => formDialog('Resultados del obsequio', [{ k: 'delivered_at', label: 'Fecha de entrega', type: 'date' }, { k: 'posts_count', label: 'Publicaciones', type: 'number', min: 0 },
