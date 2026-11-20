@@ -145,34 +145,41 @@
   function card(p, i, total) {
     const prices = p.variants.map(v => Number(v.price)), lo = Math.min(...prices), hi = Math.max(...prices);
     const live = p.variants.filter(v => v.available > 0), colors = uniq(p.variants.map(v => v.color).filter(Boolean));
-    const big = total >= 5 && i % 5 === 0;
-    // Al pasar el cursor (o al estar a la vista, en las prendas grandes) recorre las vistas del color mostrado.
+    // Miniaturas arriba de cada modelo: un color disponible por miniatura; al tocarla cambia la foto de la tarjeta.
+    const stocked = uniq(live.map(v => v.color)); let cur = stocked[0];
+    const swatches = h('div', { class: 'swatches', role: 'group', 'aria-label': 'Colores disponibles de ' + p.name }, stocked.map(c => {
+      const own = p.images.find(x => c && x.color === c);
+      return h('button', { class: 'sw', type: 'button', title: c || 'Color único', 'aria-label': c || 'Color único', 'aria-pressed': 'false', 'data-color': c || '', onclick: () => show(c) },
+        own ? photo(own.path, '') : h('span', { 'aria-hidden': 'true' }, (c || p.name).slice(0, 2)));
+    }));
+    // Al pasar el cursor recorre las vistas (frente, espalda, detalle) del color mostrado.
     const main = h('span', { class: 'main' }); let reel = null;
-    const show = color => { if (reel) reel.stop(); const paths = imgsOf(p, color);
+    const show = color => { if (reel) reel.stop(); cur = color; const paths = imgsOf(p, color);
+      for (const b of swatches.children) { const on = b.dataset.color === (color || ''); b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); }
       if (!paths.length) { reel = null; return main.replaceChildren(h('span', { class: 'ph', 'aria-hidden': 'true' }, initials(p))); }
-      reel = loop(main, paths, p.name + (color ? ', ' + color : ''), big ? 2600 : 1300, { auto: big, eager: i < 2 }); };
-    show(live[0] && live[0].color);
-    const el = h('article', { class: 'card' + (big ? ' lg' + (i % 10 === 5 ? ' r' : '') : '') });
-    const qaBtn = live.length ? h('button', { class: 'qa-open', type: 'button', 'aria-expanded': 'false', onclick: () => quickAdd(p, top, qaBtn, show) }, 'Agregar +') : null;
+      reel = loop(main, paths, p.name + (color ? ', ' + color : ''), 1300, { eager: i < 4 }); };
+    show(cur);
+    const el = h('article', { class: 'card' });
+    const qaBtn = live.length ? h('button', { class: 'qa-open', type: 'button', 'aria-expanded': 'false', onclick: () => quickAdd(p, top, qaBtn, show, cur) }, 'Agregar +') : null;
     const top = h('div', { class: 'card-top' },
-      h('button', { class: 'card-media', type: 'button', 'aria-label': 'Ver ' + p.name, onclick: () => openProduct(p),
+      h('button', { class: 'card-media', type: 'button', 'aria-label': 'Ver ' + p.name, onclick: () => openProduct(p, false, cur),
         onmouseenter: () => { if (reel && !reel.auto && matchMedia('(hover: hover)').matches) reel.start(true); },
         onmouseleave: () => { if (reel && !reel.auto) reel.rewind(); } }, main,
         !live.length ? h('span', { class: 'flag out' }, 'Agotado') : stockOf(p) === 1 ? h('span', { class: 'flag' }, 'Última pieza') : null),
       qaBtn);
-    el.replaceChildren(top,
+    el.replaceChildren(stocked.length ? swatches : h('div', { class: 'swatches' }), top,
       h('div', { class: 'card-info' },
-        h('button', { class: 'card-name', type: 'button', onclick: () => openProduct(p) }, p.name),
+        h('button', { class: 'card-name', type: 'button', onclick: () => openProduct(p, false, cur) }, p.name),
         h('span', { class: 'card-price' }, lo === hi ? money(lo) : 'Desde ' + money(lo)),
-        h('span', { class: 'card-colors' }, colors.length > 1 ? colors.length + ' colores' : colors[0] || p.category)));
+        h('span', { class: 'card-colors' }, !stocked.length ? 'Agotado' : stocked.length > 1 ? stocked.length + ' colores disponibles' : stocked[0] || p.category)));
     return el;
   }
 
   // Compra rápida: color (si hay más de uno) y talla sobre la misma tarjeta; tocar la talla agrega.
-  function quickAdd(p, el, btn, show) {
+  function quickAdd(p, el, btn, show, start) {
     if (openQa) { const same = openQa.el === el; openQa.close(); if (same) return; }
     const live = () => p.variants.filter(v => leftOf(v) > 0);
-    let color = (live()[0] || {}).color;
+    let color = live().some(v => v.color === start) ? start : (live()[0] || {}).color;
     const panel = h('div', { class: 'qa', role: 'group', 'aria-label': 'Agregar ' + p.name });
     const close = () => { panel.remove(); btn.setAttribute('aria-expanded', 'false'); btn.hidden = false; openQa = null; };
     function draw() {
@@ -226,13 +233,13 @@
     $('pdp').inert = !$('bag').hidden; $('scrim').hidden = $('bag').hidden;
   }
 
-  function openProduct(p, keepHash) {
+  function openProduct(p, keepHash, start) {
     if (openQa) openQa.close();
     if (!pdpProduct) lastFocus = document.activeElement;
     pdpProduct = p;
     if (!keepHash) history.replaceState(null, '', '#p=' + p.id);
     const colors = uniq(p.variants.map(v => v.color));
-    let color = (p.variants.find(v => v.available > 0) || p.variants[0]).color, sel = null;
+    let color = (p.variants.find(v => v.color === start && start !== undefined) || p.variants.find(v => v.available > 0) || p.variants[0]).color, sel = null;
     const gallery = h('div', { class: 'pdp-gallery' }), buy = h('div', { class: 'buy' }), price = h('p', { class: 'pdp-price' });
     const sizes = uniq(p.variants.map(v => String(v.size || '').split(' / ')[0]).filter(Boolean));
     const lengths = uniq(p.variants.map(v => String(v.size || '').split(' / ')[1]).filter(Boolean));
