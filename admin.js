@@ -182,7 +182,8 @@
           kpi('Utilidad bruta estimada', money(d.gross_profit_range), 'venta − costo − descuentos; sin comisiones ni envíos'),
           kpi('Entregados', d.orders_delivered_range), kpi('Compras de mercancía', money(d.purchases_range))),
         h('div', { class: 'card stack' }, h('h3', {}, 'Ventas por día'),
-          d.by_day.length ? h('div', { class: 'bars' }, d.by_day.map(x => h('div', { style: 'height:' + Math.round(Number(x.total) / max * 100) + '%', 'data-tip': fmtDate(x.d) + ' · ' + money(x.total) })))
+          d.by_day.length ? h('div', { class: 'bars' + (d.by_day.length > 14 ? ' dense' : ''), role: 'img', 'aria-label': 'Ventas por día del periodo' }, d.by_day.map(x => h('div', { class: 'bar-col', 'data-tip': fmtDate(x.d) + ' · ' + money(x.total) },
+            h('span', { class: 'bar-val' }, money(x.total)), h('i', { style: 'height:' + Math.max(2, Math.round(Number(x.total) / max * 100)) + '%' }), h('span', { class: 'bar-day' }, fmtDate(x.d).replace(/ \d{4}$/, '')))))
                           : h('p', { class: 'muted' }, 'Aún no hay ventas en el periodo.')),
         h('h2', {}, 'Inventario'),
         h('div', { class: 'kpis' }, kpi('Piezas en existencia', d.stock_units, d.stock_available + ' disponibles · ' + d.stock_reserved + ' comprometidas'),

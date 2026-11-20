@@ -67,9 +67,12 @@ dialog::backdrop { background: rgba(0,0,0,.4); }
 .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
 .kpi { background: #fff; border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; }
 .kpi b { display: block; font-size: 21px; letter-spacing: -.02em; margin-top: 3px; }
-.bars { display: flex; align-items: flex-end; gap: 4px; height: 150px; padding-top: 10px; }
-.bars div { flex: 1; background: var(--brand); border-radius: 5px 5px 0 0; min-height: 2px; position: relative; }
-.bars div:hover::after { content: attr(data-tip); position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%); background: var(--ink); color: #fff; padding: 3px 7px; border-radius: 6px; font-size: 11px; white-space: nowrap; }
+.bars { display: flex; align-items: stretch; gap: 6px; height: 190px; padding-top: 6px; }
+.bar-col { flex: 1 1 0; max-width: 64px; min-width: 0; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; gap: 4px; position: relative; }
+.bar-col i { display: block; width: 100%; background: var(--brand); border-radius: 5px 5px 0 0; flex: none; max-height: calc(100% - 44px); }
+.bar-val, .bar-day { font-size: 11px; line-height: 1.2; white-space: nowrap; color: var(--muted, #6b7280); } .bar-val { color: inherit; font-weight: 600; }
+.bars.dense .bar-val, .bars.dense .bar-day { display: none; } .bars.dense .bar-col { max-width: none; } .bars.dense .bar-col i { max-height: 100%; }
+.bars.dense .bar-col:hover::after { content: attr(data-tip); position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%); background: var(--ink); color: #fff; padding: 3px 7px; border-radius: 6px; font-size: 11px; white-space: nowrap; z-index: 2; }
 .thumbs { display: flex; gap: 8px; flex-wrap: wrap; } .thumbs figure { position: relative; }
 .thumbs img { width: 84px; height: 104px; object-fit: cover; border-radius: 10px; border: 1px solid var(--line); display: block; }
 .thumbs button { position: absolute; top: 3px; right: 3px; }
